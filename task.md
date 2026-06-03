@@ -150,3 +150,14 @@ Track development status across all sprints of the Nifty Analysis Engine.
 - [x] Verification
   - [x] Run existing unit tests to confirm build status
   - [x] Verify functionality via a custom mock test or integration test
+
+---
+
+## [x] Sprint 12 — Swagger API Documentation
+- [x] Dependencies Setup
+  - [x] Add `springdoc-openapi-starter-webmvc-ui` dependency to `pom.xml`
+- [x] Configuration Setup
+  - [x] Create [OpenApiConfig.java](file:///Users/meet/Documents/GitHub/nifty-analysis-engine/src/main/java/com/nifty/analysis/config/OpenApiConfig.java) with customized OpenAPI definition
+- [x] Verification
+  - [x] Verify compilation and test runs remain green
+
