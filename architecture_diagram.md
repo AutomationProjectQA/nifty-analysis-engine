@@ -34,7 +34,7 @@ graph TD
         J & K & L & M -->|Agent Biases & Metrics| N["ConfidenceEngine"]
         N -->|Calculate Raw Score| O["Active Weights (Trend, OI, PCR, VWAP, RSI...)"]
         O -->|Raw Weighted Confidence %| P["CriticAgent"]
-        P -->|Apply Penalty Checks (RSI overbought, high VIX)| Q["Final Adjusted Confidence %"]
+        P -->|Apply Penalty Checks - RSI overbought or high VIX| Q["Final Adjusted Confidence %"]
         Q -->|Gating check >= 80%| R{"Signal Triggered?"}
         R -->|No| S["Log: No Trade"]
         R -->|Yes| T["Save TradeSignal (ACTIVE)"]
@@ -49,7 +49,7 @@ graph TD
 
     %% 6. Feedback & Self-Learning
     subgraph FeedbackLayer ["6. Self-Learning Loop"]
-        W -->|Trade Outcome (Target/SL/Expiry)| X["TradeResult Table"]
+        W -->|Trade Outcome - Target, SL, or Expiry| X["TradeResult Table"]
         X -->|Optimize Active Weights| Y["AdaptiveWeightsService"]
         Y -->|Update Weights| O
     end
