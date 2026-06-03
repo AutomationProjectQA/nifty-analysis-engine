@@ -11,6 +11,12 @@ import com.nifty.analysis.entity.OptionSnapshot;
 import com.nifty.analysis.repository.MarketCandleRepository;
 import com.nifty.analysis.repository.MarketSnapshotRepository;
 import com.nifty.analysis.repository.OptionSnapshotRepository;
+import com.nifty.analysis.entity.TradeSignal;
+import com.nifty.analysis.entity.TradeResult;
+import com.nifty.analysis.repository.TradeSignalRepository;
+import com.nifty.analysis.repository.TradeResultRepository;
+import com.nifty.analysis.notification.TelegramBotService;
+import com.nifty.analysis.service.LlmService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -32,11 +38,15 @@ public class MarketCollectorService {
     private final MarketSnapshotRepository marketSnapshotRepository;
     private final OptionSnapshotRepository optionSnapshotRepository;
     private final MarketCandleRepository marketCandleRepository;
+    private final TradeSignalRepository tradeSignalRepository;
+    private final TradeResultRepository tradeResultRepository;
     
     private final RedisService redisService;
     private final TechnicalIndicatorService technicalIndicatorService;
     private final OptionsIndicatorService optionsIndicatorService;
     private final DecisionAgent decisionAgent;
+    private final TelegramBotService telegramBotService;
+    private final LlmService llmService;
 
     @Transactional
     public void collect() {
@@ -106,6 +116,9 @@ public class MarketCollectorService {
             // 4. Trigger Decision Agent signal evaluations
             decisionAgent.evaluateMarketForSignals(snapshot, prevSnapshot.map(MarketSnapshot::getNiftySpot).orElse(null));
 
+            // 5. Update and resolve active trade signals in real-time
+            updateActiveTrades(snapshot);
+
         } catch (Exception e) {
             log.error("Error during data collection cycle", e);
         }
@@ -152,5 +165,169 @@ public class MarketCollectorService {
                 .plusMinutes(roundedMinute)
                 .withSecond(0)
                 .withNano(0);
+    }
+
+    @Transactional
+    public void updateActiveTrades(MarketSnapshot latest) {
+        log.info("Checking and updating active trades relative to spot price {}...", latest.getNiftySpot());
+        List<TradeSignal> activeSignals = tradeSignalRepository.findByStatus("ACTIVE");
+        if (activeSignals.isEmpty()) {
+            return;
+        }
+
+        double spot = latest.getNiftySpot();
+        for (TradeSignal signal : activeSignals) {
+            Optional<MarketSnapshot> entrySnapshot = marketSnapshotRepository.findLatestBefore(signal.getSignalTime());
+            double entrySpot = entrySnapshot.map(MarketSnapshot::getNiftySpot).orElse(spot);
+
+            boolean isCall = "BUY_CE".equals(signal.getSignalType());
+            double currentOptionPrice;
+            if (isCall) {
+                currentOptionPrice = signal.getEntry() + (spot - entrySpot) * 0.5;
+            } else {
+                currentOptionPrice = signal.getEntry() + (entrySpot - spot) * 0.5;
+            }
+
+            currentOptionPrice = Math.round(currentOptionPrice * 100.0) / 100.0;
+
+            if (currentOptionPrice <= signal.getStopLoss()) {
+                signal.setStatus("FAILED");
+                tradeSignalRepository.save(signal);
+
+                TradeResult result = new TradeResult();
+                result.setSignal(signal);
+                result.setOutcome("STOP_LOSS");
+                result.setProfitLoss(signal.getStopLoss() - signal.getEntry());
+                result.setHoldingTime(java.time.Duration.between(signal.getSignalTime(), latest.getSnapshotTime()).toSeconds());
+                result.setAccuracy(0.0);
+                tradeResultRepository.save(result);
+
+                String msg = String.format("🚨 *TRADE RESOLVED: STOP LOSS HIT*\n\n" +
+                        "*Signal:* %s Strike %d\n" +
+                        "*Entry Premium:* %.2f (Nifty Spot at Entry: %.2f)\n" +
+                        "*Current Premium:* %.2f (Current Nifty Spot: %.2f)\n" +
+                        "*Stop Loss:* %.2f\n" +
+                        "*P&L:* %.2f points\n" +
+                        "*Holding Time:* %d seconds",
+                        signal.getSignalType(), signal.getStrike(), signal.getEntry(), entrySpot,
+                        currentOptionPrice, spot, signal.getStopLoss(), result.getProfitLoss(), result.getHoldingTime());
+                telegramBotService.sendMessage(msg);
+                log.info("Active trade resolved: SL hit for signal ID={}", signal.getId());
+            } else if (currentOptionPrice >= signal.getTarget2()) {
+                signal.setStatus("COMPLETED");
+                tradeSignalRepository.save(signal);
+
+                TradeResult result = new TradeResult();
+                result.setSignal(signal);
+                result.setOutcome("TARGET2");
+                result.setProfitLoss(signal.getTarget2() - signal.getEntry());
+                result.setHoldingTime(java.time.Duration.between(signal.getSignalTime(), latest.getSnapshotTime()).toSeconds());
+                result.setAccuracy(100.0);
+                tradeResultRepository.save(result);
+
+                String msg = String.format("🎉 *TRADE RESOLVED: TARGET 2 HIT*\n\n" +
+                        "*Signal:* %s Strike %d\n" +
+                        "*Entry Premium:* %.2f (Nifty Spot at Entry: %.2f)\n" +
+                        "*Current Premium:* %.2f (Current Nifty Spot: %.2f)\n" +
+                        "*Target 2:* %.2f\n" +
+                        "*P&L:* +%.2f points\n" +
+                        "*Holding Time:* %d seconds",
+                        signal.getSignalType(), signal.getStrike(), signal.getEntry(), entrySpot,
+                        currentOptionPrice, spot, signal.getTarget2(), result.getProfitLoss(), result.getHoldingTime());
+                telegramBotService.sendMessage(msg);
+                log.info("Active trade resolved: Target 2 hit for signal ID={}", signal.getId());
+            }
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public void send30MinSummary() {
+        log.info("Generating and sending Nifty 30-minute status update...");
+        java.time.ZonedDateTime nowIst = java.time.ZonedDateTime.now(java.time.ZoneId.of("Asia/Kolkata"));
+        LocalDateTime todayStart = nowIst.toLocalDate().atStartOfDay();
+        LocalDateTime todayEnd = nowIst.toLocalDate().atTime(23, 59, 59);
+
+        List<MarketSnapshot> todaySnapshots = marketSnapshotRepository.findBetween(todayStart, todayEnd);
+        if (todaySnapshots.isEmpty()) {
+            Optional<MarketSnapshot> latestOpt = marketSnapshotRepository.findLatest();
+            if (latestOpt.isEmpty()) {
+                log.warn("No market snapshots found. Cannot send 30-min summary.");
+                return;
+            }
+            todaySnapshots = List.of(latestOpt.get());
+        }
+
+        // Sort chronologically
+        todaySnapshots = new java.util.ArrayList<>(todaySnapshots);
+        todaySnapshots.sort(java.util.Comparator.comparing(MarketSnapshot::getSnapshotTime));
+
+        MarketSnapshot latest = todaySnapshots.get(todaySnapshots.size() - 1);
+        double open = todaySnapshots.get(0).getNiftySpot();
+        double high = todaySnapshots.stream().mapToDouble(MarketSnapshot::getNiftySpot).max().orElse(latest.getNiftySpot());
+        double low = todaySnapshots.stream().mapToDouble(MarketSnapshot::getNiftySpot).min().orElse(latest.getNiftySpot());
+
+        List<TradeSignal> activeTrades = tradeSignalRepository.findByStatus("ACTIVE");
+        List<TradeSignal> todayTrades = tradeSignalRepository.findBySignalTimeAfter(todayStart);
+        List<TradeSignal> resolvedTodayTrades = todayTrades.stream()
+                .filter(t -> !"ACTIVE".equals(t.getStatus()))
+                .toList();
+
+        String aiSummary = llmService.generateMarketSummary(
+                latest.getNiftySpot(), open, high, low,
+                latest.getRsi(), latest.getVwap(), latest.getEma20(), latest.getEma50(),
+                activeTrades, resolvedTodayTrades
+        );
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("📊 *NIFTY 30-MINUTE MARKET UPDATE* 📊\n\n");
+        sb.append("💰 *Nifty Spot Prices:*\n");
+        sb.append(String.format("• *Open:* `%.2f`\n", open));
+        sb.append(String.format("• *High:* `%.2f`\n", high));
+        sb.append(String.format("• *Low:* `%.2f`\n", low));
+        sb.append(String.format("• *Current (Running):* `%.2f`\n\n", latest.getNiftySpot()));
+
+        sb.append("📈 *Technical Indicators:*\n");
+        sb.append(String.format("• *RSI (14):* `%.2f`\n", latest.getRsi() != null ? latest.getRsi() : 50.0));
+        sb.append(String.format("• *VWAP:* `%.2f`\n", latest.getVwap() != null ? latest.getVwap() : latest.getNiftySpot()));
+        sb.append(String.format("• *EMA 20:* `%.2f` | *EMA 50:* `%.2f`\n\n",
+                latest.getEma20() != null ? latest.getEma20() : latest.getNiftySpot(),
+                latest.getEma50() != null ? latest.getEma50() : latest.getNiftySpot()));
+
+        sb.append("⚡ *Trade Signal Status:*\n");
+        sb.append("• *Active/Running Trades:*\n");
+        if (activeTrades.isEmpty()) {
+            sb.append("  _None_\n");
+        } else {
+            for (TradeSignal t : activeTrades) {
+                Optional<MarketSnapshot> entrySnapshot = marketSnapshotRepository.findLatestBefore(t.getSignalTime());
+                double entrySpot = entrySnapshot.map(MarketSnapshot::getNiftySpot).orElse(latest.getNiftySpot());
+                boolean isCall = "BUY_CE".equals(t.getSignalType());
+                double currentOptionPrice = isCall ? t.getEntry() + (latest.getNiftySpot() - entrySpot) * 0.5
+                                                   : t.getEntry() + (entrySpot - latest.getNiftySpot()) * 0.5;
+                currentOptionPrice = Math.round(currentOptionPrice * 100.0) / 100.0;
+
+                sb.append(String.format("  - %s Strike %d (Entry: %.2f, Current: %.2f, SL: %.2f, Target2: %.2f)\n",
+                        t.getSignalType(), t.getStrike(), t.getEntry(), currentOptionPrice, t.getStopLoss(), t.getTarget2()));
+            }
+        }
+
+        sb.append("• *Today's Resolved Trades:*\n");
+        if (resolvedTodayTrades.isEmpty()) {
+            sb.append("  _None_\n\n");
+        } else {
+            for (TradeSignal t : resolvedTodayTrades) {
+                Optional<TradeResult> resOpt = tradeResultRepository.findBySignalId(t.getId());
+                String outcome = resOpt.map(TradeResult::getOutcome).orElse(t.getStatus());
+                double pnl = resOpt.map(TradeResult::getProfitLoss).orElse(0.0);
+                sb.append(String.format("  - %s Strike %d: *%s* (P&L: %s%.2f points)\n",
+                        t.getSignalType(), t.getStrike(), outcome, pnl >= 0 ? "+" : "", pnl));
+            }
+            sb.append("\n");
+        }
+
+        sb.append("🤖 *AI Market Analysis:*\n");
+        sb.append(aiSummary).append("\n");
+
+        telegramBotService.sendMessage(sb.toString());
     }
 }

@@ -60,6 +60,40 @@ public class TelegramBotService {
                 );
     }
 
+    public void sendMessage(String text) {
+        // Escape underscores to prevent Telegram Markdown parsing errors
+        text = text.replace("_", "\\_");
+        
+        log.info("\n=== GENERATED TELEGRAM UPDATE ===\n{}\n==============================", text);
+        
+        if (!enabled) {
+            log.info("Telegram notification skipped (nifty.telegram.enabled is false)");
+            return;
+        }
+
+        if (botToken.isEmpty() || chatId.isEmpty()) {
+            log.warn("Telegram bot token or chat ID is empty. Skipping notification dispatch.");
+            return;
+        }
+
+        java.net.URI uri = org.springframework.web.util.UriComponentsBuilder
+                .fromUriString("https://api.telegram.org/bot" + botToken + "/sendMessage")
+                .queryParam("chat_id", chatId)
+                .queryParam("text", text)
+                .queryParam("parse_mode", "Markdown")
+                .build()
+                .toUri();
+        
+        webClientBuilder.build().post()
+                .uri(uri)
+                .retrieve()
+                .bodyToMono(String.class)
+                .subscribe(
+                        response -> log.info("Telegram message sent successfully! Response: {}", response),
+                        error -> log.error("Failed to send Telegram message", error)
+                );
+    }
+
     private String formatSignalMessage(TradeSignal signal, List<String> reasons) {
         StringBuilder sb = new StringBuilder();
         sb.append("🚀 *BUY SIGNAL*\n\n");

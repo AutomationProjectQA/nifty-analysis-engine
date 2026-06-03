@@ -16,7 +16,7 @@ public interface MarketSnapshotRepository extends JpaRepository<MarketSnapshot, 
     @Query("SELECT m FROM MarketSnapshot m ORDER BY m.snapshotTime DESC LIMIT 1")
     Optional<MarketSnapshot> findLatest();
 
-    @Query("SELECT m FROM MarketSnapshot m WHERE m.snapshotTime < :time ORDER BY m.snapshotTime DESC LIMIT 1")
+    @Query("SELECT m FROM MarketSnapshot m WHERE m.snapshotTime <= :time ORDER BY m.snapshotTime DESC LIMIT 1")
     Optional<MarketSnapshot> findLatestBefore(@Param("time") LocalDateTime time);
 
     @Query("SELECT m FROM MarketSnapshot m WHERE m.snapshotTime < :time ORDER BY m.snapshotTime DESC")

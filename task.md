@@ -120,3 +120,33 @@ Track development status across all sprints of the Nifty Analysis Engine.
   - [x] Implement adjustment formulas mapping correlations and tuning active `confidence_weight` values
 - [x] Persistence Updater
   - [x] Update table values dynamically, logging historical shifts in engine weights
+
+---
+
+## [x] Sprint 10 — Angel One Live Data Integration
+- [x] Live Ingestion Client
+  - [x] Implement TOTP generation and Angel One login flow
+  - [x] Add master scrip downloading and mapping
+  - [x] Connect Nifty Index and Futures fetching
+  - [x] Add live options chain mapping
+- [x] LLM Model Upgrade
+  - [x] Upgrade model to `gemini-2.5-flash` in `LlmService`
+- [x] Verification
+  - [x] Build and run test connections class
+
+---
+
+## [x] Sprint 11 — 30-Minute Status Updates & Live Active Trade Tracking
+- [x] Repository Layer
+  - [x] Add query to find signals by time in `TradeSignalRepository`
+- [x] Notification & AI Services Layer
+  - [x] Add generic `sendMessage` method to `TelegramBotService`
+  - [x] Add `generateMarketSummary` to `LlmService` with template fallback
+- [x] Core Business Logic & Ingestion Layer
+  - [x] Implement `updateActiveTrades` in `MarketCollectorService` and call in `collect()`
+  - [x] Implement `send30MinSummary` in `MarketCollectorService`
+- [x] Scheduler Layer
+  - [x] Add `@Scheduled` task `send30MinUpdate` to `MarketScheduler`
+- [x] Verification
+  - [x] Run existing unit tests to confirm build status
+  - [x] Verify functionality via a custom mock test or integration test

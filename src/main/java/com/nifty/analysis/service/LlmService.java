@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import com.nifty.analysis.entity.TradeSignal;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -76,6 +77,89 @@ public class LlmService {
             log.error("Failed to fetch response from Gemini API", e);
             return buildTemplateExplanation(signalType, strike, confidence, scores);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    public String generateMarketSummary(double spot, double open, double high, double low, Double rsi, Double vwap,
+            Double ema20, Double ema50, List<TradeSignal> activeTrades, List<TradeSignal> todayTrades) {
+        
+        StringBuilder activeStr = new StringBuilder();
+        if (activeTrades == null || activeTrades.isEmpty()) {
+            activeStr.append("None");
+        } else {
+            for (TradeSignal t : activeTrades) {
+                activeStr.append(String.format("- %s on Strike %d (Entry: %.2f, SL: %.2f, Target1: %.2f, Target2: %.2f)\n",
+                    t.getSignalType(), t.getStrike(), t.getEntry(), t.getStopLoss(), t.getTarget1(), t.getTarget2()));
+            }
+        }
+
+        StringBuilder todayStr = new StringBuilder();
+        if (todayTrades == null || todayTrades.isEmpty()) {
+            todayStr.append("None");
+        } else {
+            for (TradeSignal t : todayTrades) {
+                todayStr.append(String.format("- %s Strike %d: %s (Entry: %.2f)\n",
+                    t.getSignalType(), t.getStrike(), t.getStatus(), t.getEntry()));
+            }
+        }
+
+        String prompt = "You are the Nifty Market Summary Agent. Write a brief, 3-sentence summary of the current market state and trend context based on the following parameters.\n\n"
+                + "Nifty Spot: " + spot + "\n"
+                + "Today's Range - Open: " + open + ", High: " + high + ", Low: " + low + "\n"
+                + "Technical Indicators - RSI: " + rsi + ", VWAP: " + vwap + ", EMA20: " + ema20 + ", EMA50: " + ema50 + "\n"
+                + "Active Trades:\n" + activeStr + "\n"
+                + "Today's Completed/Other Trades:\n" + todayStr + "\n\n"
+                + "Guidelines: Keep it professional and direct. Summarize whether momentum is shifting bullish/bearish, how the price sits relative to VWAP/EMA support, and if any active trades are in progress.";
+
+        if (geminiApiKey == null || geminiApiKey.isEmpty()) {
+            log.info("Gemini API key is missing. Falling back to template-based market summary.");
+            return buildTemplateMarketSummary(spot, open, high, low, rsi, vwap, ema20, ema50);
+        }
+
+        String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key="
+                + geminiApiKey;
+
+        Map<String, Object> requestBody = new HashMap<>();
+        Map<String, Object> contentsMap = new HashMap<>();
+        Map<String, Object> partsMap = new HashMap<>();
+
+        partsMap.put("text", prompt);
+        contentsMap.put("parts", List.of(partsMap));
+        requestBody.put("contents", List.of(contentsMap));
+
+        try {
+            String response = webClientBuilder.build().post()
+                    .uri(url)
+                    .bodyValue(requestBody)
+                    .retrieve()
+                    .bodyToMono(Map.class)
+                    .map(map -> {
+                        try {
+                            List<Map<String, Object>> candidates = (List<Map<String, Object>>) map.get("candidates");
+                            Map<String, Object> content = (Map<String, Object>) candidates.get(0).get("content");
+                            List<Map<String, Object>> parts = (List<Map<String, Object>>) content.get("parts");
+                            return (String) parts.get(0).get("text");
+                        } catch (Exception ex) {
+                            log.error("Failed to parse Gemini response structure", ex);
+                            return null;
+                        }
+                    })
+                    .onErrorReturn("Market summary generated successfully.")
+                    .block();
+
+            return response != null ? response.trim()
+                    : buildTemplateMarketSummary(spot, open, high, low, rsi, vwap, ema20, ema50);
+        } catch (Exception e) {
+            log.error("Failed to fetch response from Gemini API", e);
+            return buildTemplateMarketSummary(spot, open, high, low, rsi, vwap, ema20, ema50);
+        }
+    }
+
+    private String buildTemplateMarketSummary(double spot, double open, double high, double low, Double rsi, Double vwap,
+            Double ema20, Double ema50) {
+        String trend = (ema20 != null && spot >= ema20) ? "bullish" : "bearish";
+        return String.format("Nifty is currently trading at %.2f, exhibiting a %s structural bias. Today's intraday range spans between %.2f and %.2f. Technical readings show RSI at %.2f and VWAP at %.2f.",
+            spot, trend, low, high, rsi != null ? rsi : 50.0, vwap != null ? vwap : spot);
     }
 
     private String buildPrompt(String signalType, int strike, double confidence, Map<String, Double> scores,
