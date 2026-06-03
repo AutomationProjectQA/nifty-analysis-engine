@@ -1,0 +1,9 @@
+# AI Assistant Instructions
+
+Before generating, editing, or suggesting any code or architecture changes in this repository, you MUST first read, understand, and strictly follow the coding standards and market domain rules defined in:
+- rules.md (file:///Users/meet/Documents/GitHub/nifty-analysis-engine/rules.md)
+
+## Critical Constraints to Adhere To:
+1. **Tech Stack & Style:** Java 21 features, Spring Boot 3.5, constructor injection with Lombok `@RequiredArgsConstructor`, snake_case for DB columns, Flyway schema migrations, and Redis caching prefixes (`market:latest`, `option:latest`).
+2. **Domain Boundaries:** Restrict trading signals to Indian Market Hours (09:15 AM - 03:30 PM IST, Monday-Friday) and apply proper option calculations (PCR, Max Pain, OI Build-Up).
+3. **No AI-Driven Pricing/Scoring:** Confidence scoring, entry points, stop-losses, and target figures must be computed mathematically and deterministically. LLMs (Gemini/GPT) must only be used as a natural language summary and message formatting layer.

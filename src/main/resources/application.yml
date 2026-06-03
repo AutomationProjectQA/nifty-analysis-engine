@@ -1,0 +1,69 @@
+spring:
+  application:
+    name: nifty-analysis-engine
+  
+  # Database Configuration
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/nifty}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+  
+  # JPA / Hibernate Configuration
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  # Flyway Migration Configuration
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+
+  # Redis Cache Configuration
+  data:
+    redis:
+      host: ${SPRING_REDIS_HOST:localhost}
+      port: ${SPRING_REDIS_PORT:6379}
+      timeout: 2000
+
+# Logging Levels
+logging:
+  level:
+    root: INFO
+    com.nifty.analysis: INFO
+    org.springframework.cache: DEBUG
+
+# Nifty Analysis Engine Properties
+nifty:
+  collector:
+    # Ingestion provider: simulated or angelone
+    provider: "angelone"
+
+    # Set to true to enforce Indian stock market hours (09:15 - 15:30 IST, Mon-Fri)
+    # Default is false to make local testing with SimulatedDataClient work 24/7.
+    market-hours-only: false
+    
+    # Cron expression for data collection scheduler (default: every 1 minute)
+    cron: "0 * * * * *"
+    
+  # Telegram Notification Configuration
+  telegram:
+    enabled: true
+    bot-token: "8696753335:AAGWsEhCExcb843_37f6W__xYl20P2PoLHM"
+    chat-id: "1356393233"
+
+  # AI Decision & Explanation Service Configuration
+  ai:
+    gemini-api-key: "AQ.Ab8RN6IwGCY3S5RZ6Q_0cmW8uRj48sa0eN8yvrgP8BA_Ere16Q"
+
+  # Angel One SmartAPI Client Configuration
+  angelone:
+    api-key: "ITN5sUnv"
+    client-code: "M213870"
+    password: "1210"
+    totp-key: "3HC74EZFONVIKT2SPQT4WFQLUQ"

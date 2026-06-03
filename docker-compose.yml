@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: nifty-postgres
+    environment:
+      POSTGRES_DB: nifty
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - nifty-db-data:/var/lib/postgresql/data
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    container_name: nifty-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - nifty-redis-data:/data
+    restart: always
+
+volumes:
+  nifty-db-data:
+    driver: local
+  nifty-redis-data:
+    driver: local
