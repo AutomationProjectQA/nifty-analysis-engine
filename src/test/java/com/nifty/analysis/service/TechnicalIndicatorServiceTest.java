@@ -85,21 +85,23 @@ class TechnicalIndicatorServiceTest {
     @Test
     void testCalculateVwapSuccess() {
         // Arrange
+        LocalDateTime evaluationTime = LocalDateTime.now().toLocalDate().atTime(10, 0);
+
         MarketSnapshot s1 = new MarketSnapshot();
         s1.setNiftySpot(23500.0);
         s1.setVolume(100.0);
-        s1.setSnapshotTime(LocalDateTime.now().minusMinutes(5));
+        s1.setSnapshotTime(evaluationTime.minusMinutes(5));
 
         MarketSnapshot s2 = new MarketSnapshot();
         s2.setNiftySpot(23510.0);
         s2.setVolume(200.0);
-        s2.setSnapshotTime(LocalDateTime.now().minusMinutes(2));
+        s2.setSnapshotTime(evaluationTime.minusMinutes(2));
 
         when(marketSnapshotRepository.findBetween(any(LocalDateTime.class), any(LocalDateTime.class)))
                 .thenReturn(List.of(s1, s2));
 
         // Act
-        double vwap = technicalIndicatorService.calculateVwap(23520.0, 300.0);
+        double vwap = technicalIndicatorService.calculateVwap(23520.0, 300.0, evaluationTime);
 
         // Assert
         // Total Volume = 100 + 200 + 300 = 600

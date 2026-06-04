@@ -21,7 +21,7 @@ public class ConfidenceWeight {
     @Column(name = "factor", nullable = false, unique = true, length = 50)
     private String factor; // "Trend", "OI", "PCR", "VWAP", etc.
 
-    @Column(name = "weight", nullable = false)
+    @Column(name = "weight", nullable = false, columnDefinition = "numeric")
     private Double weight;
 
     @Column(name = "active", nullable = false)
