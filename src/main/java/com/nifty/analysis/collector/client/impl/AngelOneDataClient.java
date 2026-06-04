@@ -111,8 +111,8 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
         } catch (Exception e) {
             log.error("Failed to download or parse Angel One Scrip Master. Fallback to hardcoded tokens.", e);
             // Seed essential defaults
-            scripMap.put("Nifty 50", new ScripInfo("26000", "Nifty 50", "NSE", "", 0.0));
-            scripMap.put("INDIA VIX", new ScripInfo("26017", "INDIA VIX", "NSE", "", 0.0));
+            scripMap.put("Nifty 50", new ScripInfo("99926000", "Nifty 50", "NSE", "", 0.0));
+            scripMap.put("INDIA VIX", new ScripInfo("99926017", "INDIA VIX", "NSE", "", 0.0));
             scripMasterLoaded = true;
         }
     }
@@ -187,12 +187,33 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
                 futToken = scripMap.get(niftyFutureSymbol).token();
             }
 
+            // Find Spot and VIX tokens dynamically from scripMap
+            String spotToken = "99926000";
+            String spotExch = "NSE";
+            ScripInfo spotInfo = scripMap.get("Nifty 50");
+            if (spotInfo != null) {
+                spotToken = spotInfo.token();
+                spotExch = spotInfo.exchSeg();
+            }
+
+            String vixToken = "99926017";
+            String vixExch = "NSE";
+            ScripInfo vixInfo = scripMap.get("INDIA VIX");
+            if (vixInfo != null) {
+                vixToken = vixInfo.token();
+                vixExch = vixInfo.exchSeg();
+            }
+
             Map<String, Object> request = new HashMap<>();
             request.put("mode", "FULL");
             Map<String, List<String>> exchangeTokens = new HashMap<>();
-            exchangeTokens.put("NSE", List.of("26000", "26017")); // Nifty Spot, VIX Spot
+            
+            // Add Spot and VIX to their respective exchanges
+            exchangeTokens.computeIfAbsent(spotExch, k -> new ArrayList<>()).add(spotToken);
+            exchangeTokens.computeIfAbsent(vixExch, k -> new ArrayList<>()).add(vixToken);
+
             if (!"0".equals(futToken)) {
-                exchangeTokens.put("NFO", List.of(futToken));
+                exchangeTokens.computeIfAbsent("NFO", k -> new ArrayList<>()).add(futToken);
             }
             request.put("exchangeTokens", exchangeTokens);
 
@@ -225,12 +246,12 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
                     String token = (String) quote.get("symbolToken");
                     if (token == null) token = (String) quote.get("token");
                     
-                    if ("26000".equals(token)) {
+                    if (spotToken.equals(token)) {
                         spot = parseDouble(quote.get("ltp"));
                         double vol = parseDouble(quote.get("volume"));
                         if (vol == 0.0) vol = parseDouble(quote.get("tradeVolume"));
                         volume = vol;
-                    } else if ("26017".equals(token)) {
+                    } else if (vixToken.equals(token)) {
                         vix = parseDouble(quote.get("ltp"));
                     } else if (token != null && token.equals(futToken)) {
                         futures = parseDouble(quote.get("ltp"));
