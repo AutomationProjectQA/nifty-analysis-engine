@@ -137,9 +137,8 @@ public class BacktestingEngine {
                     o.getIv(), o.getPcr(), o.getMaxPain(), o.getSnapshotTime()
             )).toList();
 
-            // Evaluate signal
-            double rawConf = confidenceEngine.calculateRawConfidence(current, optionDtos, spotChange).rawConfidence();
             boolean isBullishBias = current.getEma20() != null && current.getEma50() != null && current.getNiftySpot() > current.getEma20();
+            double rawConf = confidenceEngine.calculateRawConfidence(current, optionDtos, spotChange, isBullishBias).rawConfidence();
             
             CriticAgent.CriticResult criticResult = criticAgent.evaluateAndApplyPenalties(rawConf, current, optionChain, isBullishBias);
 

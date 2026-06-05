@@ -80,7 +80,7 @@ public class DecisionAgent {
         }
 
         // 3. Compute raw confidence
-        ConfidenceEngine.RawConfidenceResult rawResult = confidenceEngine.calculateRawConfidence(latest, optionChainDtos, spotChange);
+        ConfidenceEngine.RawConfidenceResult rawResult = confidenceEngine.calculateRawConfidence(latest, optionChainDtos, spotChange, isBullish);
         
         // 4. Critic Agent invalidation checks
         CriticAgent.CriticResult criticResult = criticAgent.evaluateAndApplyPenalties(

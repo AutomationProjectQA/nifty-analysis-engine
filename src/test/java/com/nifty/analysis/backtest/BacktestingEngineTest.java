@@ -100,7 +100,7 @@ class BacktestingEngineTest {
 
         // Mock confidence engine returning high confidence on first snap
         ConfidenceEngine.RawConfidenceResult rawRes = new ConfidenceEngine.RawConfidenceResult(85.0, Collections.emptyMap());
-        when(confidenceEngine.calculateRawConfidence(any(), anyList(), anyDouble())).thenReturn(rawRes);
+        when(confidenceEngine.calculateRawConfidence(any(), anyList(), anyDouble(), anyBoolean())).thenReturn(rawRes);
         
         CriticAgent.CriticResult critRes = new CriticAgent.CriticResult(85.0, Collections.emptyList());
         when(criticAgent.evaluateAndApplyPenalties(anyDouble(), any(), anyList(), anyBoolean())).thenReturn(critRes);

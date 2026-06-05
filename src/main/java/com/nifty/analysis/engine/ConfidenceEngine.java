@@ -31,7 +31,14 @@ public class ConfidenceEngine {
 
     public RawConfidenceResult calculateRawConfidence(MarketSnapshot latest, List<OptionSnapshotDto> optionChain,
             double spotChange) {
-        log.info("Calculating raw confidence score for market tick...");
+        AgentResponse technicalBias = technicalAgent.analyze(latest);
+        boolean isCall = !"BEARISH".equals(technicalBias.bias());
+        return calculateRawConfidence(latest, optionChain, spotChange, isCall);
+    }
+
+    public RawConfidenceResult calculateRawConfidence(MarketSnapshot latest, List<OptionSnapshotDto> optionChain,
+            double spotChange, boolean isCall) {
+        log.info("Calculating raw confidence score for market tick (Direction: {})...", isCall ? "BULLISH" : "BEARISH");
 
         // 1. Fetch dynamic weights from DB
         List<ConfidenceWeight> weights = confidenceWeightRepository.findByActiveTrue();
@@ -55,23 +62,48 @@ public class ConfidenceEngine {
             totalWeight = 100.0;
         }
 
-        // 2. Fetch agent scores
-        double trendScore = marketRegimeAgent.analyze(latest.getSnapshotTime()).score();
+        // 2. Fetch agent scores (direction-aware)
+        double trendScoreVal = marketRegimeAgent.analyze(latest.getSnapshotTime()).score();
+        double trendScore = isCall ? trendScoreVal : 100.0 - trendScoreVal;
 
-        double rsiScore = latest.getRsi() != null && latest.getRsi() >= 55.0 && latest.getRsi() <= 68.0 ? 100.0
-                : (latest.getRsi() != null && latest.getRsi() >= 45.0 && latest.getRsi() < 55.0 ? 50.0 : 0.0);
-        double vwapScore = latest.getVwap() != null && latest.getNiftySpot() > latest.getVwap() ? 100.0 : 0.0;
+        Double rsi = latest.getRsi();
+        double rsiScore;
+        if (isCall) {
+            rsiScore = rsi != null && rsi >= 55.0 && rsi <= 68.0 ? 100.0
+                    : (rsi != null && rsi >= 45.0 && rsi < 55.0 ? 50.0 : 0.0);
+        } else {
+            rsiScore = rsi != null && rsi <= 40.0 ? 100.0
+                    : (rsi != null && rsi > 40.0 && rsi <= 55.0 ? 50.0 : 0.0);
+        }
+
+        double vwapScore;
+        if (isCall) {
+            vwapScore = latest.getVwap() != null && latest.getNiftySpot() > latest.getVwap() ? 100.0 : 0.0;
+        } else {
+            vwapScore = latest.getVwap() != null && latest.getNiftySpot() < latest.getVwap() ? 100.0 : 0.0;
+        }
 
         AgentResponse optionsAgentResponse = optionsAgent.analyze(optionChain, latest.getNiftySpot(), spotChange);
         double overallPcr = optionChain.isEmpty() ? 0.0 : optionChain.getFirst().pcr(); // Strike PCR is stored;
                                                                                         // calculateOverallPcr is better
-        double pcrScore = overallPcr >= 1.1 ? 100.0 : (overallPcr >= 0.8 ? 50.0 : 0.0);
-        double oiScore = optionsAgentResponse.score(); // OI build-up score
+        double pcrScore;
+        if (isCall) {
+            pcrScore = overallPcr >= 1.1 ? 100.0 : (overallPcr >= 0.8 ? 50.0 : 0.0);
+        } else {
+            pcrScore = overallPcr <= 0.7 ? 100.0 : (overallPcr < 1.0 ? 50.0 : 0.0);
+        }
+
+        double oiScore = isCall ? optionsAgentResponse.score() : 100.0 - optionsAgentResponse.score(); // OI build-up score
 
         double futurePremium = latest.getNiftyFuture() - latest.getNiftySpot();
-        double futuresScore = futurePremium > 35.0 ? 100.0 : (futurePremium > 15.0 ? 50.0 : 0.0);
+        double futuresScore;
+        if (isCall) {
+            futuresScore = futurePremium > 35.0 ? 100.0 : (futurePremium > 15.0 ? 50.0 : 0.0);
+        } else {
+            futuresScore = futurePremium < 15.0 ? 100.0 : (futurePremium < 35.0 ? 50.0 : 0.0);
+        }
 
-        double sentimentScore = sentimentAgent.analyze().score();
+        double sentimentScore = isCall ? sentimentAgent.analyze().score() : 100.0 - sentimentAgent.analyze().score();
 
         // 3. Compute weighted confidence
         double weightedSum = 0.0;
@@ -94,7 +126,7 @@ public class ConfidenceEngine {
         double rawConfidence = weightedSum / totalWeight;
         rawConfidence = Math.round(rawConfidence * 100.0) / 100.0;
 
-        log.info("Raw weighted confidence score calculated: {}%", rawConfidence);
+        log.info("Raw weighted confidence score calculated: {}% (Direction: {})", rawConfidence, isCall ? "BULLISH" : "BEARISH");
         return new RawConfidenceResult(rawConfidence, factorScores);
     }
 
