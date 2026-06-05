@@ -6,7 +6,6 @@ import com.nifty.analysis.repository.MarketSnapshotRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
@@ -26,9 +25,8 @@ public class MarketRegimeAgent {
 
     public AgentResponse analyze(LocalDateTime evaluationTime) {
         List<MarketSnapshot> history = marketSnapshotRepository.findHistoryBefore(
-                evaluationTime, 
-                PageRequest.of(0, 10)
-        );
+                evaluationTime,
+                PageRequest.of(0, 10));
 
         List<String> comments = new ArrayList<>();
         if (history.isEmpty()) {
@@ -38,7 +36,7 @@ public class MarketRegimeAgent {
         MarketSnapshot latest = history.getFirst();
         double spot = latest.getNiftySpot();
         double vix = latest.getIndiaVix();
-        
+
         // 1. Check for High Volatility
         if (vix > 18.0) {
             comments.add("High volatility regime detected (VIX = " + vix + ")");
@@ -52,10 +50,12 @@ public class MarketRegimeAgent {
                     .mapToDouble(s -> Math.pow(s.getNiftySpot() - mean, 2))
                     .sum();
             double stdDev = Math.sqrt(sumSquares / history.size());
-            
-            // If price standard deviation over last 10 snapshots is less than 15 points, it is sideways
+
+            // If price standard deviation over last 10 snapshots is less than 15 points, it
+            // is sideways
             if (stdDev < 15.0) {
-                comments.add("Sideways/Consolidation regime detected (StdDev Nifty Spot = " + Math.round(stdDev * 100.0) / 100.0 + ")");
+                comments.add("Sideways/Consolidation regime detected (StdDev Nifty Spot = "
+                        + Math.round(stdDev * 100.0) / 100.0 + ")");
                 return new AgentResponse(50.0, "SIDEWAYS", comments);
             }
         }
