@@ -1,7 +1,9 @@
 package com.nifty.analysis.agent;
 
 import com.nifty.analysis.dto.AgentResponse;
+import com.nifty.analysis.entity.MarketCandle;
 import com.nifty.analysis.entity.MarketSnapshot;
+import com.nifty.analysis.repository.MarketCandleRepository;
 import com.nifty.analysis.repository.MarketSnapshotRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -18,6 +20,7 @@ import java.util.List;
 public class MarketRegimeAgent {
 
     private final MarketSnapshotRepository marketSnapshotRepository;
+    private final MarketCandleRepository marketCandleRepository;
 
     public AgentResponse analyze() {
         return analyze(LocalDateTime.now());
@@ -51,10 +54,13 @@ public class MarketRegimeAgent {
                     .sum();
             double stdDev = Math.sqrt(sumSquares / history.size());
 
-            // If price standard deviation over last 15-30 snapshots is less than 8.0 points, it is sideways
-            if (stdDev < 8.0) {
-                comments.add("Sideways/Consolidation regime detected (StdDev Nifty Spot = "
-                        + Math.round(stdDev * 100.0) / 100.0 + ")");
+            double atr = calculateAtr(evaluationTime);
+            double sidewaysThreshold = 0.25 * atr;
+
+            // If price standard deviation over last 15-30 snapshots is less than 0.25 * ATR, it is sideways
+            if (stdDev < sidewaysThreshold) {
+                comments.add(String.format("Sideways/Consolidation regime detected (StdDev = %.2f < ATR Threshold = %.2f)",
+                        stdDev, sidewaysThreshold));
                 return new AgentResponse(50.0, "SIDEWAYS", comments);
             }
         }
@@ -75,5 +81,36 @@ public class MarketRegimeAgent {
 
         comments.add("Neutral/Transition regime detected");
         return new AgentResponse(50.0, "NEUTRAL", comments);
+    }
+
+    private double calculateAtr(LocalDateTime evaluationTime) {
+        try {
+            List<MarketCandle> candles = marketCandleRepository.findHistoryBefore(
+                    "5m",
+                    evaluationTime,
+                    PageRequest.of(0, 15));
+            if (candles.size() < 2) {
+                return 15.0; // Default fallback
+            }
+            double totalTr = 0.0;
+            int count = 0;
+            for (int i = 0; i < candles.size() - 1; i++) {
+                MarketCandle current = candles.get(i);
+                MarketCandle previous = candles.get(i + 1);
+                
+                double tr = Math.max(current.getHigh() - current.getLow(),
+                        Math.max(Math.abs(current.getHigh() - previous.getClose()),
+                                 Math.abs(current.getLow() - previous.getClose())));
+                totalTr += tr;
+                count++;
+                if (count >= 14) {
+                    break;
+                }
+            }
+            return count > 0 ? (totalTr / count) : 15.0;
+        } catch (Exception e) {
+            log.error("Failed to calculate ATR. Using fallback.", e);
+            return 15.0;
+        }
     }
 }
