@@ -26,7 +26,7 @@ public class MarketRegimeAgent {
     public AgentResponse analyze(LocalDateTime evaluationTime) {
         List<MarketSnapshot> history = marketSnapshotRepository.findHistoryBefore(
                 evaluationTime,
-                PageRequest.of(0, 10));
+                PageRequest.of(0, 30));
 
         List<String> comments = new ArrayList<>();
         if (history.isEmpty()) {
@@ -44,16 +44,15 @@ public class MarketRegimeAgent {
         }
 
         // 2. Check for Sideways / Range-bound Market
-        if (history.size() >= 10) {
+        if (history.size() >= 15) {
             double mean = history.stream().mapToDouble(MarketSnapshot::getNiftySpot).average().orElse(spot);
             double sumSquares = history.stream()
                     .mapToDouble(s -> Math.pow(s.getNiftySpot() - mean, 2))
                     .sum();
             double stdDev = Math.sqrt(sumSquares / history.size());
 
-            // If price standard deviation over last 10 snapshots is less than 15 points, it
-            // is sideways
-            if (stdDev < 15.0) {
+            // If price standard deviation over last 15-30 snapshots is less than 8.0 points, it is sideways
+            if (stdDev < 8.0) {
                 comments.add("Sideways/Consolidation regime detected (StdDev Nifty Spot = "
                         + Math.round(stdDev * 100.0) / 100.0 + ")");
                 return new AgentResponse(50.0, "SIDEWAYS", comments);
