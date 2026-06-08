@@ -54,6 +54,12 @@ logging:
 
 # Nifty Analysis Engine Properties
 nifty:
+  gating-threshold: 60.0
+  order-execution:
+    enabled: true
+    lot-size: 65
+    risk-per-trade-percent: 100.0
+
   collector:
     # Ingestion provider: simulated or angelone
     provider: "angelone"

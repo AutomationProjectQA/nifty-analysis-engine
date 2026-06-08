@@ -35,7 +35,7 @@ graph TD
         N -->|Calculate Raw Score| O["Active Weights (Trend, OI, PCR, VWAP, RSI...)"]
         O -->|Raw Weighted Confidence %| P["CriticAgent"]
         P -->|Apply Penalty Checks - RSI overbought or high VIX| Q["Final Adjusted Confidence %"]
-        Q -->|Gating check >= 80%| R{"Signal Triggered?"}
+        Q -->|Gating check >= 60%| R{"Signal Triggered?"}
         R -->|No| S["Log: No Trade"]
         R -->|Yes| T["Save TradeSignal (ACTIVE)"]
     end
@@ -45,6 +45,8 @@ graph TD
         T --> U["LlmService (Gemini 2.5 Flash)"]
         U -->|Generate Thesis Explanation| V["TelegramBotService"]
         V -->|Dispatch Formatted Alert| W["Telegram Channel Chat"]
+        T --> AE["OrderExecutionService"]
+        AE -->|RMS Wallet Sizing & 2% Target ROBO Order| A1
     end
 
     %% 6. Feedback & Self-Learning
@@ -66,6 +68,6 @@ graph TD
     class C,D,E,F,G,H processing;
     class I,J,K,L,M agents;
     class N,O,P,Q,R,S,T scoring;
-    class U,V,W alert;
+    class U,V,W,AE alert;
     class X,Y feedback;
 ```

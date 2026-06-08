@@ -132,3 +132,32 @@ Verify that your Telegram Bot, Chat ID, and Gemini API Key are correctly configu
   "telegramEnabled": true
 }
 ```
+
+---
+
+## 3. Angel One SmartAPI Live Order Execution
+
+The system features real-time order placement via the Angel One SmartAPI. When a trade signal confidence meets or exceeds the threshold (configured at **60.0%**), a Robo (bracket) limit order is placed directly.
+
+### Configuration Properties
+
+Specify the following under the `nifty` block in your `application.yml` file:
+```yaml
+nifty:
+  gating-threshold: 60.0 # Confidence gating threshold
+  order-execution:
+    enabled: true        # Enable live or simulated orders
+    lot-size: 65         # Nifty option lot size
+    risk-per-trade-percent: 100.0 # Allocate 100% of wallet balance
+```
+
+### Key Execution Behaviors
+
+1. **RMS Balance Allocation**:
+   The engine requests available cash balance from the Angel One RMS endpoint (`GET .../getRMS`). It calculates the maximum possible number of lots based on 100% allocation of the available wallet cash:
+   $$\text{Lots} = \lfloor \frac{\text{Wallet Cash}}{\text{Entry Premium} \times 65} \rfloor$$
+2. **2% Profit Target (Square-off)**:
+   The system sets the profit target (square-off points offset) at exactly **2%** of the option entry premium price, rounded to the nearest tick size of `0.05`. Symmetrical 2% stop-loss offsets are applied.
+3. **Simulation Mode Fallback**:
+   If the API credentials are not active or `SIMULATED_JWT_TOKEN` is loaded, the service falls back to **Simulation Mode**. A simulated trade signal is evaluated, sized, and printed to logs and Telegram, without hitting live broker order endpoints.
+

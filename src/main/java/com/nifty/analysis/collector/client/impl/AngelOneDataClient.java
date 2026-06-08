@@ -506,4 +506,67 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
         }
         return bytes;
     }
+
+    public String getJwtToken() {
+        return this.jwtToken;
+    }
+
+    public String getApiKey() {
+        return this.apiKey;
+    }
+
+    public String getExpiryDateSymbolStr() {
+        return findCurrentOptionExpiryDateSymbolStr();
+    }
+
+    public record ScripTokenDetails(String token, String symbol, String exchSeg) {}
+
+    public ScripTokenDetails getScripDetails(String symbol) {
+        ScripInfo info = scripMap.get(symbol);
+        if (info != null) {
+            return new ScripTokenDetails(info.token(), info.symbol(), info.exchSeg());
+        }
+        return null;
+    }
+
+    public double fetchLtp(String exchange, String token) {
+        ensureAuthenticated();
+        if ("SIMULATED_JWT_TOKEN".equals(jwtToken)) {
+            return 150.0;
+        }
+        try {
+            Map<String, Object> request = new HashMap<>();
+            request.put("mode", "LTP");
+            Map<String, List<String>> exchangeTokens = new HashMap<>();
+            exchangeTokens.put(exchange, Collections.singletonList(token));
+            request.put("exchangeTokens", exchangeTokens);
+
+            Map<String, Object> response = webClientBuilder.build().post()
+                    .uri("https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote/")
+                    .header("Authorization", "Bearer " + jwtToken)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .header("X-UserType", "USER")
+                    .header("X-SourceID", "WEB")
+                    .header("X-ClientLocalIP", "192.168.1.100")
+                    .header("X-ClientPublicIP", "192.168.1.100")
+                    .header("X-MACAddress", "02:00:00:00:00:00")
+                    .header("X-PrivateKey", apiKey)
+                    .bodyValue(request)
+                    .retrieve()
+                    .bodyToMono(Map.class)
+                    .block();
+
+            if (response != null && Boolean.TRUE.equals(response.get("status"))) {
+                Map<String, Object> data = (Map<String, Object>) response.get("data");
+                List<Map<String, Object>> fetched = (List<Map<String, Object>>) data.get("fetched");
+                if (fetched != null && !fetched.isEmpty()) {
+                    return parseDouble(fetched.get(0).get("ltp"));
+                }
+            }
+        } catch (Exception e) {
+            log.error("Failed to fetch LTP for exchange: {}, token: {}", exchange, token, e);
+        }
+        return 150.0;
+    }
 }

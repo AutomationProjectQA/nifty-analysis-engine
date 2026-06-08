@@ -74,6 +74,32 @@ public class CriticAgent {
             penalties.add(new PenaltyDetails("OI Support", -penalty, "Heavy Put writing building up at nearby strikes creates downside support (bearish headwind)"));
         }
 
+        // 5. In-depth Resistance/Support Wall checking (using total accumulated OI at next strike)
+        int targetResistanceStrike = isCall ? atmStrike + 50 : atmStrike - 50;
+        for (OptionSnapshot strike : optionChain) {
+            if (strike.getStrikePrice() != null && strike.getStrikePrice() == targetResistanceStrike) {
+                long ceOi = strike.getCeOi() != null ? strike.getCeOi() : 0L;
+                long peOi = strike.getPeOi() != null ? strike.getPeOi() : 0L;
+                if (isCall && ceOi > 0) {
+                    double ratio = (double) ceOi / (peOi > 0 ? peOi : 1.0);
+                    if (ratio > 2.0) {
+                        double penalty = 15.0;
+                        adjustedConfidence -= penalty;
+                        penalties.add(new PenaltyDetails("OI Resistance Wall", -penalty, 
+                                "Massive Call writing resistance wall at strike " + targetResistanceStrike + " (Call/Put OI Ratio = " + Math.round(ratio * 100.0) / 100.0 + ")"));
+                    }
+                } else if (!isCall && peOi > 0) {
+                    double ratio = (double) peOi / (ceOi > 0 ? ceOi : 1.0);
+                    if (ratio > 2.0) {
+                        double penalty = 15.0;
+                        adjustedConfidence -= penalty;
+                        penalties.add(new PenaltyDetails("OI Support Wall", -penalty, 
+                                "Massive Put writing support wall at strike " + targetResistanceStrike + " (Put/Call OI Ratio = " + Math.round(ratio * 100.0) / 100.0 + ")"));
+                    }
+                }
+            }
+        }
+
         adjustedConfidence = Math.max(0.0, Math.round(adjustedConfidence * 100.0) / 100.0);
         log.info("Critic analysis complete. Adjusted Confidence: {}%", adjustedConfidence);
 

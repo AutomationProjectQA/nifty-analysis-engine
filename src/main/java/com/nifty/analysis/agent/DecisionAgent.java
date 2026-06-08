@@ -12,8 +12,10 @@ import com.nifty.analysis.repository.SignalExplanationRepository;
 import com.nifty.analysis.repository.TradeSignalRepository;
 import com.nifty.analysis.notification.TelegramBotService;
 import com.nifty.analysis.service.LlmService;
+import com.nifty.analysis.service.OrderExecutionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,17 +29,22 @@ import java.util.Map;
 @Slf4j
 public class DecisionAgent {
 
+    @Value("${nifty.gating-threshold:80.0}")
+    private double gatingThreshold;
+
     private final ConfidenceEngine confidenceEngine;
     private final CriticAgent criticAgent;
     private final TechnicalAgent technicalAgent;
     private final OptionsAgent optionsAgent;
     private final SentimentAgent sentimentAgent;
     
+    private final MarketRegimeAgent marketRegimeAgent;
     private final TradeSignalRepository tradeSignalRepository;
     private final SignalExplanationRepository signalExplanationRepository;
     private final OptionSnapshotRepository optionSnapshotRepository;
     private final TelegramBotService telegramBotService;
     private final LlmService llmService;
+    private final OrderExecutionService orderExecutionService;
 
     @Transactional
     public void evaluateMarketForSignals(MarketSnapshot latest, Double prevSpot) {
@@ -51,6 +58,14 @@ public class DecisionAgent {
         }
         
         List<OptionSnapshot> optionChainEntities = optionSnapshotRepository.findBySnapshotTime(latestOptionTime);
+        
+        // 1.5. Gate trades if market regime is sideways to avoid Theta decay
+        AgentResponse regimeResponse = marketRegimeAgent.analyze(latest.getSnapshotTime());
+        if ("SIDEWAYS".equals(regimeResponse.bias())) {
+            log.info("Market regime is Sideways. Skipping trade evaluation to avoid Theta decay.");
+            return;
+        }
+
         List<OptionSnapshotDto> optionChainDtos = optionChainEntities.stream().map(o -> new OptionSnapshotDto(
                 o.getStrikePrice(), o.getCeOi(), o.getPeOi(), o.getCeOiChange(), o.getPeOiChange(),
                 o.getIv(), o.getPcr(), o.getMaxPain(), o.getSnapshotTime()
@@ -88,10 +103,10 @@ public class DecisionAgent {
         );
 
         double finalConfidence = criticResult.adjustedConfidence();
-        log.info("Final evaluated signal confidence: {}% (Threshold = 80%)", finalConfidence);
+        log.info("Final evaluated signal confidence: {}% (Threshold = {}%)", finalConfidence, gatingThreshold);
 
-        // 5. Gating: Signal generated only if adjusted confidence >= 80%
-        if (finalConfidence < 80.0) {
+        // 5. Gating: Signal generated only if adjusted confidence >= gatingThreshold
+        if (finalConfidence < gatingThreshold) {
             log.info("Signal confidence ({}%) below threshold. NO TRADE.", finalConfidence);
             return;
         }
@@ -165,5 +180,8 @@ public class DecisionAgent {
         }
 
         telegramBotService.sendSignal(signal, reasons);
+
+        // 9. Execute Order via Angel One
+        orderExecutionService.executeOrder(signalType, atmStrike, spotPrice);
     }
 }
