@@ -32,6 +32,27 @@ public class OptionsIndicatorService {
     }
 
     /**
+     * Calculates the overall Volume-weighted Put-Call Ratio (Volume PCR) of the entire option chain.
+     * Formula: Total Put Volume / Total Call Volume
+     */
+    public double calculateVolumePcr(List<OptionSnapshotDto> optionChain) {
+        long totalCallVol = 0;
+        long totalPutVol = 0;
+
+        for (OptionSnapshotDto strike : optionChain) {
+            totalCallVol += strike.ceVolume() != null ? strike.ceVolume() : 0L;
+            totalPutVol += strike.peVolume() != null ? strike.peVolume() : 0L;
+        }
+
+        if (totalCallVol == 0) {
+            return 0.0;
+        }
+
+        double volPcr = (double) totalPutVol / totalCallVol;
+        return Math.round(volPcr * 100.0) / 100.0;
+    }
+
+    /**
      * Calculates the Max Pain strike price.
      * The strike at which option sellers (writers) experience the minimum total loss.
      */

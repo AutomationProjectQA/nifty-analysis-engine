@@ -7,6 +7,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import com.nifty.analysis.entity.TradeSignal;
+import com.nifty.analysis.entity.TradeReflection;
+import com.nifty.analysis.entity.MarketSnapshot;
+import com.nifty.analysis.repository.TradeReflectionRepository;
+import com.nifty.analysis.repository.MarketSnapshotRepository;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,6 +25,8 @@ public class LlmService {
     private String geminiApiKey;
 
     private final WebClient.Builder webClientBuilder;
+    private final TradeReflectionRepository tradeReflectionRepository;
+    private final MarketSnapshotRepository marketSnapshotRepository;
 
     /**
      * Calls Gemini 1.5 Flash to generate a natural language explanation of the
@@ -30,6 +37,22 @@ public class LlmService {
     public String generateTradeExplanation(String signalType, int strike, double confidence, Map<String, Double> scores,
             String commentSummary) {
         String prompt = buildPrompt(signalType, strike, confidence, scores, commentSummary);
+
+        if (tradeReflectionRepository != null) {
+            try {
+                List<TradeReflection> reflections = tradeReflectionRepository.findTop3ByOrderByFailedAtDesc();
+                if (reflections != null && !reflections.isEmpty()) {
+                    StringBuilder lessonsBuilder = new StringBuilder();
+                    lessonsBuilder.append("\nRecent failed trade lessons to avoid:\n");
+                    for (int i = 0; i < reflections.size(); i++) {
+                        lessonsBuilder.append(String.format("- Lesson %d: %s\n", i + 1, reflections.get(i).getReflectionText()));
+                    }
+                    prompt += lessonsBuilder.toString();
+                }
+            } catch (Exception ex) {
+                log.error("Failed to query recent trade reflections for explanation", ex);
+            }
+        }
 
         if (geminiApiKey == null || geminiApiKey.isEmpty()) {
             log.info("Gemini API key is missing. Falling back to template-based explanation.");
@@ -182,5 +205,91 @@ public class LlmService {
         return "Trade setup generated based on a " + direction + " with " + Math.round(confidence) + "% confidence. " +
                 "The engine detected key " + factorName + " near " + strike + ". " +
                 "All parameters satisfy the deterministic confidence thresholds.";
+    }
+
+    @SuppressWarnings("unchecked")
+    public void generatePostMortem(TradeSignal failedSignal, List<MarketSnapshot> marketContext) {
+        if (failedSignal == null) {
+            return;
+        }
+
+        StringBuilder contextBuilder = new StringBuilder();
+        if (marketContext != null && !marketContext.isEmpty()) {
+            for (MarketSnapshot ms : marketContext) {
+                contextBuilder.append(String.format("Time: %s, Spot: %.2f, Future: %.2f, RSI: %.2f, VWAP: %.2f, EMA20: %.2f, EMA50: %.2f\n",
+                        ms.getSnapshotTime(), ms.getNiftySpot(), ms.getNiftyFuture(), ms.getRsi(), ms.getVwap(), ms.getEma20(), ms.getEma50()));
+            }
+        } else {
+            contextBuilder.append("No market context available.");
+        }
+
+        String prompt = "You are the Nifty Trade Post-Mortem Analysis Agent. This trade hit its Stop-Loss. "
+                + "Compare the entry parameters, technical indicators, and thesis against the price movement leading to the failure. "
+                + "What trap did the model fall into? Analyze the failed trade detail below:\n\n"
+                + "Trade Details:\n"
+                + "Signal ID: " + failedSignal.getId() + "\n"
+                + "Signal Time: " + failedSignal.getSignalTime() + "\n"
+                + "Signal Type: " + failedSignal.getSignalType() + "\n"
+                + "Strike Price: " + failedSignal.getStrike() + "\n"
+                + "Entry Price: " + failedSignal.getEntry() + "\n"
+                + "Stop-Loss: " + failedSignal.getStopLoss() + "\n"
+                + "Target 1: " + failedSignal.getTarget1() + "\n"
+                + "Target 2: " + failedSignal.getTarget2() + "\n"
+                + "Confidence Score: " + failedSignal.getConfidence() + "%\n\n"
+                + "Market Context Leading to SL:\n"
+                + contextBuilder.toString() + "\n\n"
+                + "Guidelines: Write a concise, 3-sentence post-mortem reflection specifying the likely reason of failure (e.g. counter-trend entry, whip-saw, or false breakout) and what lesson the model should learn to avoid this trap in future.";
+
+        String reflectionText = null;
+
+        if (geminiApiKey != null && !geminiApiKey.isEmpty()) {
+            String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key="
+                    + geminiApiKey;
+
+            Map<String, Object> requestBody = new HashMap<>();
+            Map<String, Object> contentsMap = new HashMap<>();
+            Map<String, Object> partsMap = new HashMap<>();
+
+            partsMap.put("text", prompt);
+            contentsMap.put("parts", List.of(partsMap));
+            requestBody.put("contents", List.of(contentsMap));
+
+            try {
+                reflectionText = webClientBuilder.build().post()
+                        .uri(url)
+                        .bodyValue(requestBody)
+                        .retrieve()
+                        .bodyToMono(Map.class)
+                        .map(map -> {
+                            try {
+                                List<Map<String, Object>> candidates = (List<Map<String, Object>>) map.get("candidates");
+                                Map<String, Object> content = (Map<String, Object>) candidates.get(0).get("content");
+                                List<Map<String, Object>> parts = (List<Map<String, Object>>) content.get("parts");
+                                return (String) parts.get(0).get("text");
+                            } catch (Exception ex) {
+                                log.error("Failed to parse Gemini response structure for post-mortem", ex);
+                                return null;
+                            }
+                        })
+                        .block();
+            } catch (Exception e) {
+                log.error("Failed to call Gemini API for post-mortem reflection", e);
+            }
+        }
+
+        if (reflectionText == null || reflectionText.trim().isEmpty()) {
+            reflectionText = "Failed trade reflection: Trade hit SL at " + failedSignal.getStopLoss() + ". Likely caused by a sudden trend reversal or false breakout against the " + failedSignal.getSignalType() + " signal thesis.";
+        }
+
+        try {
+            TradeReflection reflection = new TradeReflection();
+            reflection.setSignal(failedSignal);
+            reflection.setFailedAt(LocalDateTime.now());
+            reflection.setReflectionText(reflectionText.trim());
+            tradeReflectionRepository.save(reflection);
+            log.info("Saved trade reflection for failed trade signal ID: {}", failedSignal.getId());
+        } catch (Exception ex) {
+            log.error("Failed to save TradeReflection in database", ex);
+        }
     }
 }

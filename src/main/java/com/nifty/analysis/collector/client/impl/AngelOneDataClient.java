@@ -342,18 +342,25 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
                         oi = parseLong(quote.get("openInterest"));
                     }
 
+                    long volume = parseLong(quote.get("volume"));
+                    if (volume == 0L) {
+                        volume = parseLong(quote.get("tradeVolume"));
+                    }
+
                     if (isCe) {
                         builder.ceOi = oi;
                         long lastCeOi = lastCeOiMap.getOrDefault(strike, 0L);
                         builder.ceOiChange = lastCeOi > 0 ? (oi - lastCeOi) : 0L;
                         lastCeOiMap.put(strike, oi);
                         builder.ceIv = 12.5;
+                        builder.ceVolume = volume;
                     } else {
                         builder.peOi = oi;
                         long lastPeOi = lastPeOiMap.getOrDefault(strike, 0L);
                         builder.peOiChange = lastPeOi > 0 ? (oi - lastPeOi) : 0L;
                         lastPeOiMap.put(strike, oi);
                         builder.peIv = 12.5;
+                        builder.peVolume = volume;
                     }
                 }
 
@@ -370,6 +377,8 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
                         12.5,
                         Math.round(pcr * 100.0) / 100.0,
                         (double) atmStrike,
+                        b.ceVolume,
+                        b.peVolume,
                         now
                     ));
                 }
@@ -389,6 +398,8 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
         long peOiChange;
         double ceIv;
         double peIv;
+        long ceVolume;
+        long peVolume;
 
         OptionSnapshotDtoBuilder(int strike) {
             this.strike = strike;
@@ -460,7 +471,7 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
         LocalDateTime now = LocalDateTime.now();
         for (int i = -10; i <= 10; i++) {
             int strike = atmStrike + (i * 50);
-            list.add(new OptionSnapshotDto(strike, 1000000L, 1100000L, 5000L, 10000L, 12.5, 1.1, (double) atmStrike, now));
+            list.add(new OptionSnapshotDto(strike, 1000000L, 1100000L, 5000L, 10000L, 12.5, 1.1, (double) atmStrike, 150000L, 160000L, now));
         }
         return list;
     }

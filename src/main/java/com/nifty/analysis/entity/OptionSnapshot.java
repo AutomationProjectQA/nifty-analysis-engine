@@ -45,4 +45,10 @@ public class OptionSnapshot {
 
     @Column(name = "max_pain")
     private Double maxPain;
+
+    @Column(name = "ce_volume")
+    private Long ceVolume;
+
+    @Column(name = "pe_volume")
+    private Long peVolume;
 }

@@ -2,11 +2,14 @@ package com.nifty.analysis.agent;
 
 import com.nifty.analysis.dto.AgentResponse;
 import com.nifty.analysis.dto.OptionSnapshotDto;
+import com.nifty.analysis.entity.OptionSnapshot;
+import com.nifty.analysis.repository.OptionSnapshotRepository;
 import com.nifty.analysis.service.OptionsIndicatorService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -16,6 +19,7 @@ import java.util.List;
 public class OptionsAgent {
 
     private final OptionsIndicatorService optionsIndicatorService;
+    private final OptionSnapshotRepository optionSnapshotRepository;
 
     public AgentResponse analyze(List<OptionSnapshotDto> optionChain, double spotPrice, double spotChange) {
         List<String> comments = new ArrayList<>();
@@ -74,6 +78,48 @@ public class OptionsAgent {
         } else if (shortBuildUpCount > longBuildUpCount) {
             score -= 15.0;
             comments.add("Active bearish OI build-up near ATM strikes (Call writing dominance)");
+        }
+
+        // 4. Calculate Volume-weighted PCR
+        double volPcr = optionsIndicatorService.calculateVolumePcr(optionChain);
+        if (volPcr >= 1.2) {
+            score += 10.0;
+            comments.add("Volume PCR is bullish (" + volPcr + "), indicating higher volume on Puts");
+        } else if (volPcr <= 0.7) {
+            score -= 10.0;
+            comments.add("Volume PCR is bearish (" + volPcr + "), indicating higher volume on Calls");
+        } else {
+            comments.add("Volume PCR is neutral (" + volPcr + ")");
+        }
+
+        // 5. Calculate ATM OI Velocity
+        LocalDateTime latestTime = optionChain.stream()
+                .map(OptionSnapshotDto::timestamp)
+                .filter(java.util.Objects::nonNull)
+                .findFirst()
+                .orElse(LocalDateTime.now());
+
+        List<OptionSnapshot> historicalAtms = optionSnapshotRepository
+                .findByStrikePriceAndSnapshotTimeAfterOrderBySnapshotTimeDesc(atmStrike, latestTime.minusMinutes(5));
+
+        if (historicalAtms != null && historicalAtms.size() >= 2) {
+            OptionSnapshot newestAtm = historicalAtms.get(0);
+            OptionSnapshot oldestAtm = historicalAtms.get(historicalAtms.size() - 1);
+            
+            long ceOiChange5m = (newestAtm.getCeOi() != null ? newestAtm.getCeOi() : 0L) - (oldestAtm.getCeOi() != null ? oldestAtm.getCeOi() : 0L);
+            long peOiChange5m = (newestAtm.getPeOi() != null ? newestAtm.getPeOi() : 0L) - (oldestAtm.getPeOi() != null ? oldestAtm.getPeOi() : 0L);
+            
+            if (ceOiChange5m > 100000) {
+                score -= 15.0;
+                comments.add("Bearish ATM OI Velocity: CE OI growing rapidly (" + ceOiChange5m + " contracts/5m) at " + atmStrike + " strike");
+            } else if (peOiChange5m > 100000) {
+                score += 15.0;
+                comments.add("Bullish ATM OI Velocity: PE OI growing rapidly (" + peOiChange5m + " contracts/5m) at " + atmStrike + " strike");
+            } else {
+                comments.add("ATM OI Velocity is stable (CE Change: " + ceOiChange5m + ", PE Change: " + peOiChange5m + " over 5m)");
+            }
+        } else {
+            comments.add("Insufficient historical ATM option snapshots to compute OI Velocity");
         }
 
         score = Math.max(0.0, Math.min(100.0, score));

@@ -14,4 +14,6 @@ public interface OptionSnapshotRepository extends JpaRepository<OptionSnapshot, 
     LocalDateTime findLatestSnapshotTime();
     
     List<OptionSnapshot> findBySnapshotTime(LocalDateTime snapshotTime);
+
+    List<OptionSnapshot> findByStrikePriceAndSnapshotTimeAfterOrderBySnapshotTimeDesc(Integer strikePrice, LocalDateTime time);
 }

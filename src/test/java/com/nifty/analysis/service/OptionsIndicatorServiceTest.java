@@ -22,8 +22,8 @@ class OptionsIndicatorServiceTest {
     void testCalculateOverallPcr() {
         // Arrange
         LocalDateTime now = LocalDateTime.now();
-        OptionSnapshotDto s1 = new OptionSnapshotDto(23500, 100000L, 120000L, 0L, 0L, 12.0, 1.2, 23500.0, now);
-        OptionSnapshotDto s2 = new OptionSnapshotDto(23550, 200000L, 150000L, 0L, 0L, 12.0, 0.75, 23500.0, now);
+        OptionSnapshotDto s1 = new OptionSnapshotDto(23500, 100000L, 120000L, 0L, 0L, 12.0, 1.2, 23500.0, 15000L, 18000L, now);
+        OptionSnapshotDto s2 = new OptionSnapshotDto(23550, 200000L, 150000L, 0L, 0L, 12.0, 0.75, 23500.0, 25000L, 18000L, now);
         
         List<OptionSnapshotDto> chain = List.of(s1, s2);
 
@@ -38,13 +38,32 @@ class OptionsIndicatorServiceTest {
     }
 
     @Test
+    void testCalculateVolumePcr() {
+        // Arrange
+        LocalDateTime now = LocalDateTime.now();
+        OptionSnapshotDto s1 = new OptionSnapshotDto(23500, 100000L, 120000L, 0L, 0L, 12.0, 1.2, 23500.0, 10000L, 15000L, now);
+        OptionSnapshotDto s2 = new OptionSnapshotDto(23550, 200000L, 150000L, 0L, 0L, 12.0, 0.75, 23500.0, 30000L, 15000L, now);
+        
+        List<OptionSnapshotDto> chain = List.of(s1, s2);
+
+        // Act
+        double volPcr = optionsIndicatorService.calculateVolumePcr(chain);
+
+        // Assert
+        // Total Call Vol = 10k + 30k = 40k
+        // Total Put Vol = 15k + 15k = 30k
+        // Vol PCR = 30k / 40k = 0.75
+        assertEquals(0.75, volPcr);
+    }
+
+    @Test
     void testCalculateMaxPain() {
         // Arrange
         LocalDateTime now = LocalDateTime.now();
         // Option chain with three strikes
-        OptionSnapshotDto s1 = new OptionSnapshotDto(23400, 10000L, 50000L, 0L, 0L, 12.0, 5.0, 23400.0, now);
-        OptionSnapshotDto s2 = new OptionSnapshotDto(23500, 80000L, 70000L, 0L, 0L, 12.0, 0.875, 23500.0, now);
-        OptionSnapshotDto s3 = new OptionSnapshotDto(23600, 90000L, 10000L, 0L, 0L, 12.0, 0.11, 23600.0, now);
+        OptionSnapshotDto s1 = new OptionSnapshotDto(23400, 10000L, 50000L, 0L, 0L, 12.0, 5.0, 23400.0, 1000L, 5000L, now);
+        OptionSnapshotDto s2 = new OptionSnapshotDto(23500, 80000L, 70000L, 0L, 0L, 12.0, 0.875, 23500.0, 8000L, 7000L, now);
+        OptionSnapshotDto s3 = new OptionSnapshotDto(23600, 90000L, 10000L, 0L, 0L, 12.0, 0.11, 23600.0, 9000L, 1000L, now);
         
         List<OptionSnapshotDto> chain = List.of(s1, s2, s3);
 

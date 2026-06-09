@@ -11,5 +11,7 @@ public record OptionSnapshotDto(
     Double iv,
     Double pcr,
     Double maxPain,
+    Long ceVolume,
+    Long peVolume,
     LocalDateTime timestamp
 ) {}

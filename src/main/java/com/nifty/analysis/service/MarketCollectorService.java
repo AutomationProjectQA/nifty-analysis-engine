@@ -103,6 +103,8 @@ public class MarketCollectorService {
                 option.setIv(dto.iv());
                 option.setPcr(dto.pcr());
                 option.setMaxPain(calculatedMaxPain);
+                option.setCeVolume(dto.ceVolume());
+                option.setPeVolume(dto.peVolume());
                 return option;
             }).toList();
             
@@ -201,6 +203,16 @@ public class MarketCollectorService {
                 result.setHoldingTime(java.time.Duration.between(signal.getSignalTime(), latest.getSnapshotTime()).toSeconds());
                 result.setAccuracy(0.0);
                 tradeResultRepository.save(result);
+
+                // Asynchronously trigger post-mortem reflection for the failed trade
+                List<MarketSnapshot> context = marketSnapshotRepository.findBetween(signal.getSignalTime(), latest.getSnapshotTime());
+                java.util.concurrent.CompletableFuture.runAsync(() -> {
+                    try {
+                        llmService.generatePostMortem(signal, context);
+                    } catch (Exception ex) {
+                        log.error("Error executing post-mortem reflection task", ex);
+                    }
+                });
 
                 String msg = String.format("🚨 *TRADE RESOLVED: STOP LOSS HIT*\n\n" +
                         "*Signal:* %s Strike %d\n" +

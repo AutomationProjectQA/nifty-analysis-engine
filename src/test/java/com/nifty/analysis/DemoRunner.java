@@ -180,7 +180,7 @@ public class DemoRunner {
 
         // 7. Generate Live Gemini Analysis
         System.out.println("\n[Gemini] Calling Gemini 1.5 Flash API to generate trade thesis explanation...");
-        LlmService llmService = new LlmService(webClientBuilder);
+        LlmService llmService = new LlmService(webClientBuilder, null, null);
         setField(llmService, "geminiApiKey", geminiApiKey);
 
         Map<String, Double> scores = Map.of(

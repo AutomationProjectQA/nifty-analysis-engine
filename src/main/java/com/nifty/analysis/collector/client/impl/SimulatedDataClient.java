@@ -98,6 +98,9 @@ public class SimulatedDataClient implements MarketDataClient, OptionChainClient 
             
             // Max pain is centered around ATM generally
             double maxPain = atmStrike;
+
+            long ceVolume = Math.max(5000L, ceOi / 10 + random.nextInt(10000));
+            long peVolume = Math.max(5000L, peOi / 10 + random.nextInt(10000));
             
             snapshots.add(new OptionSnapshotDto(
                     strike,
@@ -108,6 +111,8 @@ public class SimulatedDataClient implements MarketDataClient, OptionChainClient 
                     iv,
                     pcr,
                     maxPain,
+                    ceVolume,
+                    peVolume,
                     now
             ));
         }

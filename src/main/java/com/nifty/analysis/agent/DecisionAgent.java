@@ -68,7 +68,7 @@ public class DecisionAgent {
 
         List<OptionSnapshotDto> optionChainDtos = optionChainEntities.stream().map(o -> new OptionSnapshotDto(
                 o.getStrikePrice(), o.getCeOi(), o.getPeOi(), o.getCeOiChange(), o.getPeOiChange(),
-                o.getIv(), o.getPcr(), o.getMaxPain(), o.getSnapshotTime()
+                o.getIv(), o.getPcr(), o.getMaxPain(), o.getCeVolume(), o.getPeVolume(), o.getSnapshotTime()
         )).toList();
 
         double spotPrice = latest.getNiftySpot();

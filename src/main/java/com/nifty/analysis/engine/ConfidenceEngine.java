@@ -4,11 +4,13 @@ import com.nifty.analysis.agent.MarketRegimeAgent;
 import com.nifty.analysis.agent.OptionsAgent;
 import com.nifty.analysis.agent.SentimentAgent;
 import com.nifty.analysis.agent.TechnicalAgent;
+import com.nifty.analysis.agent.MultiTimeframeAgent;
 import com.nifty.analysis.dto.AgentResponse;
 import com.nifty.analysis.dto.OptionSnapshotDto;
 import com.nifty.analysis.entity.ConfidenceWeight;
 import com.nifty.analysis.entity.MarketSnapshot;
 import com.nifty.analysis.repository.ConfidenceWeightRepository;
+import com.nifty.analysis.service.OptionsIndicatorService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -28,6 +30,8 @@ public class ConfidenceEngine {
     private final TechnicalAgent technicalAgent;
     private final OptionsAgent optionsAgent;
     private final SentimentAgent sentimentAgent;
+    private final OptionsIndicatorService optionsIndicatorService;
+    private final MultiTimeframeAgent multiTimeframeAgent;
 
     public RawConfidenceResult calculateRawConfidence(MarketSnapshot latest, List<OptionSnapshotDto> optionChain,
             double spotChange) {
@@ -52,13 +56,14 @@ public class ConfidenceEngine {
 
         if (totalWeight == 0.0) {
             log.warn("Total weights sum to zero. Defaulting factors to equal weight.");
-            weightMap.put("Trend", 20.0);
-            weightMap.put("OI", 20.0);
+            weightMap.put("Trend", 15.0);
+            weightMap.put("MultiTimeframe", 15.0);
+            weightMap.put("OI", 15.0);
             weightMap.put("PCR", 15.0);
             weightMap.put("VWAP", 15.0);
             weightMap.put("RSI", 10.0);
-            weightMap.put("Futures", 10.0);
-            weightMap.put("Sentiment", 10.0);
+            weightMap.put("Futures", 7.0);
+            weightMap.put("Sentiment", 8.0);
             totalWeight = 100.0;
         }
 
@@ -84,8 +89,7 @@ public class ConfidenceEngine {
         }
 
         AgentResponse optionsAgentResponse = optionsAgent.analyze(optionChain, latest.getNiftySpot(), spotChange);
-        double overallPcr = optionChain.isEmpty() ? 0.0 : optionChain.getFirst().pcr(); // Strike PCR is stored;
-                                                                                        // calculateOverallPcr is better
+        double overallPcr = optionsIndicatorService.calculateOverallPcr(optionChain);
         double pcrScore;
         if (isCall) {
             pcrScore = overallPcr >= 1.1 ? 100.0 : (overallPcr >= 0.8 ? 50.0 : 0.0);
@@ -105,11 +109,15 @@ public class ConfidenceEngine {
 
         double sentimentScore = isCall ? sentimentAgent.analyze().score() : 100.0 - sentimentAgent.analyze().score();
 
+        double mtScoreVal = multiTimeframeAgent.analyze(latest.getSnapshotTime()).score();
+        double mtScore = isCall ? mtScoreVal : 100.0 - mtScoreVal;
+
         // 3. Compute weighted confidence
         double weightedSum = 0.0;
         Map<String, Double> factorScores = new HashMap<>();
 
         factorScores.put("Trend", trendScore);
+        factorScores.put("MultiTimeframe", mtScore);
         factorScores.put("OI", oiScore);
         factorScores.put("PCR", pcrScore);
         factorScores.put("VWAP", vwapScore);

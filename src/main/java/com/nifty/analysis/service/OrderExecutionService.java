@@ -46,7 +46,8 @@ public class OrderExecutionService {
         AngelOneDataClient.ScripTokenDetails scrip = angelOneDataClient.getScripDetails(symbol);
         if (scrip == null) {
             log.error("Scrip details not found for symbol: {}. Cannot place order.", symbol);
-            telegramBotService.sendMessage(String.format("⚠️ *ORDER EXECUTION FAILED*\nScrip details not found for `%s`.", symbol));
+            telegramBotService.sendMessage(
+                    String.format("⚠️ *ORDER EXECUTION FAILED*\nScrip details not found for `%s`.", symbol));
             return;
         }
 
@@ -74,16 +75,17 @@ public class OrderExecutionService {
             return;
         }
 
-        // Target value is exactly 2% of buying option price (rounded to nearest 0.05 tick size)
+        // Target value is exactly 2% of buying option price (rounded to nearest 0.05
+        // tick size)
         double rawTargetPoints = entryPremium * 0.02;
         double targetPoints = Math.round(rawTargetPoints * 20.0) / 20.0;
         if (targetPoints < 0.05) {
             targetPoints = 0.05;
         }
 
-        // Symmetrical stop-loss at 2% (rounded to nearest 0.05 tick size)
-        double rawStopLossPoints = entryPremium * 0.02;
-        double stopLossPoints = Math.round(rawStopLossPoints * 20.0) / 20.0;
+        // Symmetrical stop-loss at 20% (rounded to nearest 0.05 tick size)
+        double rawStopLossPoints = entryPremium * 0.40;
+        double stopLossPoints = Math.round(rawStopLossPoints * 40.0) / 40.0;
         if (stopLossPoints < 0.05) {
             stopLossPoints = 0.05;
         }
@@ -92,9 +94,10 @@ public class OrderExecutionService {
         boolean isSimulation = jwtToken == null || "SIMULATED_JWT_TOKEN".equals(jwtToken);
 
         if (isSimulation) {
-            log.info("[SIMULATION MODE] Placing Simulated Robo Order for symbol={}, qty={}, price={}, target={}, stoploss={}",
+            log.info(
+                    "[SIMULATION MODE] Placing Simulated Robo Order for symbol={}, qty={}, price={}, target={}, stoploss={}",
                     symbol, quantity, entryPremium, targetPoints, stopLossPoints);
-            
+
             String msg = String.format("🤖 *SIMULATED ROBO ORDER PLACED*\n\n" +
                     "• *Symbol:* `%s` (Token: `%s`)\n" +
                     "• *Type:* `%s`\n" +
