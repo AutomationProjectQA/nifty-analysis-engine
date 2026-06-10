@@ -103,7 +103,10 @@ public class DecisionAgent {
                 features.spotToEma20(),
                 features.ema20ToEma50(),
                 features.vix(),
-                features.prevDailyReturn()
+                features.prevDailyReturn(),
+                features.bbWidth(),
+                features.macdHist(),
+                features.volumeRatio()
         );
         double rawConfidence = isBullish ? modelRawConfidence : 100.0 - modelRawConfidence;
         log.info("ONNX ML Model raw confidence calculated: {}% (Direction: {})", rawConfidence, isBullish ? "BULLISH" : "BEARISH");

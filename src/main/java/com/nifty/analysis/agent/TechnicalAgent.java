@@ -20,7 +20,10 @@ public class TechnicalAgent {
         double spotToEma20,
         double ema20ToEma50,
         double vix,
-        double prevDailyReturn
+        double prevDailyReturn,
+        double bbWidth,
+        double macdHist,
+        double volumeRatio
     ) {}
 
     public TechnicalFeatures getFeatures(MarketSnapshot latest) {
@@ -30,7 +33,12 @@ public class TechnicalAgent {
         double vix = latest.getIndiaVix() != null ? latest.getIndiaVix() : 15.0;
         double prevReturn = technicalIndicatorService.calculateYesterdayDailyReturn(latest.getSnapshotTime());
         
-        return new TechnicalFeatures(rsi, spotToEma20, ema20ToEma50, vix, prevReturn);
+        double bbWidth = technicalIndicatorService.calculateBollingerBandWidth(latest.getNiftySpot(), latest.getSnapshotTime());
+        double macdHist = technicalIndicatorService.calculateMacdHistogram(latest.getNiftySpot(), latest.getSnapshotTime());
+        double vol = latest.getVolume() != null ? latest.getVolume() : 0.0;
+        double volumeRatio = technicalIndicatorService.calculateVolumeRatio(vol, latest.getSnapshotTime());
+        
+        return new TechnicalFeatures(rsi, spotToEma20, ema20ToEma50, vix, prevReturn, bbWidth, macdHist, volumeRatio);
     }
 
     public AgentResponse analyze(MarketSnapshot latest) {

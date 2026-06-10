@@ -172,4 +172,88 @@ public class TechnicalIndicatorService {
         }
         return (close - open) / open;
     }
+
+    /**
+     * Calculates Bollinger Band Width (20-period standard deviation / 20-period SMA)
+     */
+    public double calculateBollingerBandWidth(double currentPrice, LocalDateTime evaluationTime) {
+        List<MarketSnapshot> history = marketSnapshotRepository.findHistoryBefore(evaluationTime, PageRequest.of(0, 19));
+        if (history.isEmpty()) {
+            return 0.001; // Avoid division by zero, standard fallback
+        }
+        List<Double> prices = new ArrayList<>();
+        prices.add(currentPrice);
+        for (MarketSnapshot snapshot : history) {
+            prices.add(snapshot.getNiftySpot());
+        }
+        double mean = prices.stream().mapToDouble(Double::doubleValue).average().orElse(currentPrice);
+        double varianceSum = 0.0;
+        for (double price : prices) {
+            varianceSum += Math.pow(price - mean, 2);
+        }
+        double stdDev = Math.sqrt(varianceSum / prices.size());
+        return Math.round(((2.0 * stdDev) / (mean + 1e-9)) * 10000.0) / 10000.0;
+    }
+
+    /**
+     * Calculates MACD Histogram (MACD line - Signal line)
+     */
+    public double calculateMacdHistogram(double currentPrice, LocalDateTime evaluationTime) {
+        List<MarketSnapshot> history = marketSnapshotRepository.findHistoryBefore(evaluationTime, PageRequest.of(0, 50));
+        if (history.isEmpty()) {
+            return 0.0;
+        }
+        // Reconstruct chronological list of prices: oldest first, then current price
+        List<Double> prices = new ArrayList<>();
+        for (int i = history.size() - 1; i >= 0; i--) {
+            prices.add(history.get(i).getNiftySpot());
+        }
+        prices.add(currentPrice);
+
+        // Calculate EMA12 and EMA26 and the MACD line
+        List<Double> macdLine = new ArrayList<>();
+        double ema12 = prices.get(0);
+        double ema26 = prices.get(0);
+        double alpha12 = 2.0 / (12.0 + 1.0);
+        double alpha26 = 2.0 / (26.0 + 1.0);
+
+        macdLine.add(ema12 - ema26);
+
+        for (int i = 1; i < prices.size(); i++) {
+            double price = prices.get(i);
+            ema12 = (price * alpha12) + (ema12 * (1.0 - alpha12));
+            ema26 = (price * alpha26) + (ema26 * (1.0 - alpha26));
+            macdLine.add(ema12 - ema26);
+        }
+
+        // Calculate Signal Line (EMA9 of MACD line)
+        double signal = macdLine.get(0);
+        double alpha9 = 2.0 / (9.0 + 1.0);
+        for (int i = 1; i < macdLine.size(); i++) {
+            signal = (macdLine.get(i) * alpha9) + (signal * (1.0 - alpha9));
+        }
+
+        double latestMacd = macdLine.get(macdLine.size() - 1);
+        return Math.round((latestMacd - signal) * 100.0) / 100.0;
+    }
+
+    /**
+     * Calculates the Volume Ratio (current volume / 20-period average volume)
+     */
+    public double calculateVolumeRatio(double currentVolume, LocalDateTime evaluationTime) {
+        List<MarketSnapshot> history = marketSnapshotRepository.findHistoryBefore(evaluationTime, PageRequest.of(0, 19));
+        if (history.isEmpty()) {
+            return 1.0;
+        }
+        double volumeSum = currentVolume;
+        for (MarketSnapshot snapshot : history) {
+            volumeSum += snapshot.getVolume() != null ? snapshot.getVolume() : 0.0;
+        }
+        double meanVolume = volumeSum / (history.size() + 1);
+        if (meanVolume == 0.0) {
+            return 1.0;
+        }
+        return Math.round((currentVolume / meanVolume) * 100.0) / 100.0;
+    }
 }
+

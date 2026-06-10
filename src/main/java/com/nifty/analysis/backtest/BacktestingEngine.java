@@ -150,7 +150,10 @@ public class BacktestingEngine {
                     features.spotToEma20(),
                     features.ema20ToEma50(),
                     features.vix(),
-                    features.prevDailyReturn()
+                    features.prevDailyReturn(),
+                    features.bbWidth(),
+                    features.macdHist(),
+                    features.volumeRatio()
             );
             double rawConf = isBullishBias ? modelRawConfidence : 100.0 - modelRawConfidence;
             

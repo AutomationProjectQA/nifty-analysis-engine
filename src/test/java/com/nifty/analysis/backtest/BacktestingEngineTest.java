@@ -106,9 +106,9 @@ class BacktestingEngineTest {
         when(optionSnapshotRepository.findBySnapshotTime(any(LocalDateTime.class)))
                 .thenReturn(List.of(opt));
 
-        TechnicalAgent.TechnicalFeatures mockFeatures = new TechnicalAgent.TechnicalFeatures(50.0, 1.0, 1.0, 15.0, 0.0);
+        TechnicalAgent.TechnicalFeatures mockFeatures = new TechnicalAgent.TechnicalFeatures(50.0, 1.0, 1.0, 15.0, 0.0, 0.015, 2.5, 1.2);
         when(technicalAgent.getFeatures(any())).thenReturn(mockFeatures);
-        when(onnxModelService.predictBullishProbability(anyDouble(), anyDouble(), anyDouble(), anyDouble(), anyDouble()))
+        when(onnxModelService.predictBullishProbability(anyDouble(), anyDouble(), anyDouble(), anyDouble(), anyDouble(), anyDouble(), anyDouble(), anyDouble()))
                 .thenReturn(85.0);
         
         CriticAgent.CriticResult critRes = new CriticAgent.CriticResult(85.0, Collections.emptyList());

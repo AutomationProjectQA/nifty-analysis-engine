@@ -51,9 +51,12 @@ public class OnnxModelService {
      * @param ema20ToEma50Ratio EMA 20 / EMA 50
      * @param vix               India VIX level
      * @param prevDailyReturn   Previous day's daily return percentage
+     * @param bbWidth           Bollinger Band Width
+     * @param macdHist          MACD Histogram
+     * @param volumeRatio       Volume Ratio
      * @return Bullish probability between 0.0 and 100.0
      */
-    public double predictBullishProbability(double rsi, double spotToEma20Ratio, double ema20ToEma50Ratio, double vix, double prevDailyReturn) {
+    public double predictBullishProbability(double rsi, double spotToEma20Ratio, double ema20ToEma50Ratio, double vix, double prevDailyReturn, double bbWidth, double macdHist, double volumeRatio) {
         if (!isModelLoaded) {
             log.warn("ONNX model not loaded. Returning fallback neutral confidence (50.0%)");
             return 50.0;
@@ -67,7 +70,10 @@ public class OnnxModelService {
                     (float) spotToEma20Ratio,
                     (float) ema20ToEma50Ratio,
                     (float) vix,
-                    (float) prevDailyReturn
+                    (float) prevDailyReturn,
+                    (float) bbWidth,
+                    (float) macdHist,
+                    (float) volumeRatio
                 }
             };
 

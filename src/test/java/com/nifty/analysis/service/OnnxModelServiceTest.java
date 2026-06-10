@@ -18,8 +18,8 @@ class OnnxModelServiceTest {
     void testPredict() {
         assertTrue(onnxModelService.isModelLoaded(), "Model should be successfully loaded from classpath");
         
-        // Execute prediction with typical feature values
-        double prob = onnxModelService.predictBullishProbability(55.0, 1.01, 1.02, 13.5, 0.005);
+        // Execute prediction with typical feature values (8 features: RSI, Spot/EMA20, EMA20/EMA50, VIX, Prev Return, BB Width, MACD Hist, Vol Ratio)
+        double prob = onnxModelService.predictBullishProbability(55.0, 1.01, 1.02, 13.5, 0.005, 0.015, 2.5, 1.2);
         
         assertTrue(prob >= 0.0 && prob <= 100.0, "Probability should be between 0.0 and 100.0");
         System.out.println("Predicted Bullish Probability: " + prob + "%");
