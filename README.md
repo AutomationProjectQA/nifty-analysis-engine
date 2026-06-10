@@ -161,3 +161,37 @@ nifty:
 3. **Simulation Mode Fallback**:
    If the API credentials are not active or `SIMULATED_JWT_TOKEN` is loaded, the service falls back to **Simulation Mode**. A simulated trade signal is evaluated, sized, and printed to logs and Telegram, without hitting live broker order endpoints.
 
+---
+
+## 4. Machine Learning Model Integration (ONNX Hybrid)
+
+The system utilizes a hybrid model structure. A quantitative Machine Learning model (Random Forest) trained on **10 years of Nifty 50 historical data** generates the raw trade confidence, while the Gemini LLM acts as the macro/event risk gate.
+
+### Training the Model
+To retrain or customize the ML model, you can run the python pipeline:
+
+1. **Install Dependencies:**
+   Make sure you have python libraries installed in your virtual environment:
+   ```bash
+   python3 -m pip install yfinance pandas numpy scikit-learn skl2onnx onnx onnxruntime
+   ```
+
+2. **Run Training Script:**
+   Execute the python script from the python folder:
+   ```bash
+   cd src/main/python
+   python3 train_model.py
+   ```
+   This script:
+   - Downloads 10 years of daily `^NSEI` (Nifty 50) and `^INDIAVIX` historical data.
+   - Generates features (`RSI`, `Spot_to_EMA20_Ratio`, `EMA20_to_EMA50_Ratio`, `VIX_Level`, and `Prev_Daily_Return`).
+   - Trains a `RandomForestClassifier` predicting whether the next day's close will be bullish (upward trend).
+   - Convers the classifier to ONNX format with ZipMap disabled and writes it directly to `src/main/resources/nifty_model.onnx`.
+
+### Java Execution
+On application startup, the `OnnxModelService` automatically loads the packaged `nifty_model.onnx` file from the classpath.
+- For every evaluation tick, `TechnicalAgent` extracts the same 5 normalized features from the current snapshot.
+- The `OnnxModelService` executes model inference to calculate the bullish/bearish probability, which represents the raw trade entry confidence.
+- This probability is forwarded to `CriticAgent` for risk penalties before gating trade order execution.
+
+

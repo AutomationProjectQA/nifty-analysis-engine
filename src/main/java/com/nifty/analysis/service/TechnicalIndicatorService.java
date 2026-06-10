@@ -11,6 +11,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -138,5 +139,37 @@ public class TechnicalIndicatorService {
         }
 
         return Math.round((sumSpotVolume / sumVolume) * 100.0) / 100.0;
+    }
+
+    /**
+     * Calculates the daily return of the previous trading day.
+     * Formula: (Close_yesterday - Open_yesterday) / Open_yesterday
+     */
+    public double calculateYesterdayDailyReturn(LocalDateTime evaluationTime) {
+        LocalDateTime todayOpen = evaluationTime.toLocalDate().atTime(9, 15);
+
+        // Yesterday's close is the latest snapshot before today's market open
+        Optional<MarketSnapshot> yesterdayCloseSnap = marketSnapshotRepository.findLatestBefore(todayOpen);
+        if (yesterdayCloseSnap.isEmpty()) {
+            return 0.0;
+        }
+
+        // Find the open snapshot from the same day as yesterday's close
+        LocalDateTime yesterdayOpenTime = yesterdayCloseSnap.get().getSnapshotTime().toLocalDate().atTime(9, 15);
+        Optional<MarketSnapshot> yesterdayOpenSnap = marketSnapshotRepository
+                .findLatestBefore(yesterdayOpenTime.plusMinutes(15));
+
+        if (yesterdayOpenSnap.isEmpty()) {
+            // Fallback: search for any snapshot around that time or just use the close snap
+            // as open
+            return 0.0;
+        }
+
+        double open = yesterdayOpenSnap.get().getNiftySpot();
+        double close = yesterdayCloseSnap.get().getNiftySpot();
+        if (open == 0.0) {
+            return 0.0;
+        }
+        return (close - open) / open;
     }
 }

@@ -2,13 +2,36 @@ package com.nifty.analysis.agent;
 
 import com.nifty.analysis.dto.AgentResponse;
 import com.nifty.analysis.entity.MarketSnapshot;
+import com.nifty.analysis.service.TechnicalIndicatorService;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
 
 @Component
+@RequiredArgsConstructor
 public class TechnicalAgent {
+
+    private final TechnicalIndicatorService technicalIndicatorService;
+
+    public record TechnicalFeatures(
+        double rsi,
+        double spotToEma20,
+        double ema20ToEma50,
+        double vix,
+        double prevDailyReturn
+    ) {}
+
+    public TechnicalFeatures getFeatures(MarketSnapshot latest) {
+        double rsi = latest.getRsi() != null ? latest.getRsi() : 50.0;
+        double spotToEma20 = (latest.getEma20() != null && latest.getEma20() > 0) ? latest.getNiftySpot() / latest.getEma20() : 1.0;
+        double ema20ToEma50 = (latest.getEma20() != null && latest.getEma50() != null && latest.getEma50() > 0) ? latest.getEma20() / latest.getEma50() : 1.0;
+        double vix = latest.getIndiaVix() != null ? latest.getIndiaVix() : 15.0;
+        double prevReturn = technicalIndicatorService.calculateYesterdayDailyReturn(latest.getSnapshotTime());
+        
+        return new TechnicalFeatures(rsi, spotToEma20, ema20ToEma50, vix, prevReturn);
+    }
 
     public AgentResponse analyze(MarketSnapshot latest) {
         List<String> comments = new ArrayList<>();
@@ -47,9 +70,9 @@ public class TechnicalAgent {
 
         // 3. Evaluate VWAP
         if (vwap != null && vwap > 0.0) {
-            if (spot > vwap) {
+            if (spot >= vwap) {
                 score += 15.0;
-                comments.add("Nifty Spot trading above daily VWAP support (" + vwap + ")");
+                comments.add("Nifty Spot trading above/at daily VWAP support (" + vwap + ")");
             } else {
                 score -= 15.0;
                 comments.add("Nifty Spot trading below daily VWAP resistance (" + vwap + ")");

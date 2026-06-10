@@ -12,6 +12,7 @@ import com.nifty.analysis.repository.SignalExplanationRepository;
 import com.nifty.analysis.repository.TradeSignalRepository;
 import com.nifty.analysis.notification.TelegramBotService;
 import com.nifty.analysis.service.LlmService;
+import com.nifty.analysis.service.OnnxModelService;
 import com.nifty.analysis.service.OrderExecutionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -45,6 +46,7 @@ public class DecisionAgent {
     private final TelegramBotService telegramBotService;
     private final LlmService llmService;
     private final OrderExecutionService orderExecutionService;
+    private final OnnxModelService onnxModelService;
 
     @Transactional
     public void evaluateMarketForSignals(MarketSnapshot latest, Double prevSpot) {
@@ -94,12 +96,24 @@ public class DecisionAgent {
             return;
         }
 
-        // 3. Compute raw confidence
+        // 3. Compute raw confidence using ONNX Machine Learning Model
+        TechnicalAgent.TechnicalFeatures features = technicalAgent.getFeatures(latest);
+        double modelRawConfidence = onnxModelService.predictBullishProbability(
+                features.rsi(),
+                features.spotToEma20(),
+                features.ema20ToEma50(),
+                features.vix(),
+                features.prevDailyReturn()
+        );
+        double rawConfidence = isBullish ? modelRawConfidence : 100.0 - modelRawConfidence;
+        log.info("ONNX ML Model raw confidence calculated: {}% (Direction: {})", rawConfidence, isBullish ? "BULLISH" : "BEARISH");
+
+        // Compute legacy factor scores for database logging and LLM summaries
         ConfidenceEngine.RawConfidenceResult rawResult = confidenceEngine.calculateRawConfidence(latest, optionChainDtos, spotChange, isBullish);
-        
+
         // 4. Critic Agent invalidation checks
         CriticAgent.CriticResult criticResult = criticAgent.evaluateAndApplyPenalties(
-                rawResult.rawConfidence(), latest, optionChainEntities, isBullish
+                rawConfidence, latest, optionChainEntities, isBullish
         );
 
         double finalConfidence = criticResult.adjustedConfidence();

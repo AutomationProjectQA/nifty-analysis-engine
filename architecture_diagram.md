@@ -23,7 +23,7 @@ graph TD
     %% 3. Analytical Agent Layer
     subgraph AgentLayer ["3. Multi-Agent Analysis"]
         H -->|Latest Snapshot & Candles| I["DecisionAgent (Orchestrator)"]
-        I -->|Evaluate Technicals| J["TechnicalAgent"]
+        I -->|Extract Normalized Features| J["TechnicalAgent"]
         I -->|Evaluate Open Interest| K["OptionsAgent"]
         I -->|Evaluate Macro Sentiment| L["SentimentAgent"]
         I -->|Evaluate Volatility & VIX| M["MarketRegimeAgent"]
@@ -31,10 +31,10 @@ graph TD
 
     %% 4. Scoring & Gating Engines
     subgraph ScoringEngine ["4. Dual Engine Evaluation"]
-        J & K & L & M -->|Agent Biases & Metrics| N["ConfidenceEngine"]
-        N -->|Calculate Raw Score| O["Active Weights (Trend, OI, PCR, VWAP, RSI...)"]
-        O -->|Raw Weighted Confidence %| P["CriticAgent"]
-        P -->|Apply Penalty Checks - RSI overbought or high VIX| Q["Final Adjusted Confidence %"]
+        J -->|Normalized Features| ONNX["OnnxModelService (XGBoost/RandomForest ONNX)"]
+        ONNX -->|Predicted Bullish Probability| CONF_CALC["Direction-Aware Raw Confidence"]
+        CONF_CALC -->|Raw Confidence %| P["CriticAgent"]
+        P -->|Apply Penalty Checks - RSI overbought, VIX, Event Risk, OI Walls| Q["Final Adjusted Confidence %"]
         Q -->|Gating check >= 60%| R{"Signal Triggered?"}
         R -->|No| S["Log: No Trade"]
         R -->|Yes| T["Save TradeSignal (ACTIVE)"]
@@ -53,7 +53,7 @@ graph TD
     subgraph FeedbackLayer ["6. Self-Learning Loop"]
         W -->|Trade Outcome - Target, SL, or Expiry| X["TradeResult Table"]
         X -->|Optimize Active Weights| Y["AdaptiveWeightsService"]
-        Y -->|Update Weights| O
+        Y -->|Update database weights| CONF_CALC
     end
 
     %% Styling
@@ -67,7 +67,7 @@ graph TD
     class A1,A2,B ingestion;
     class C,D,E,F,G,H processing;
     class I,J,K,L,M agents;
-    class N,O,P,Q,R,S,T scoring;
+    class ONNX,CONF_CALC,P,Q,R,S,T scoring;
     class U,V,W,AE alert;
     class X,Y feedback;
 ```

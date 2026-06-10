@@ -62,6 +62,13 @@
             <artifactId>flyway-database-postgresql</artifactId>
         </dependency>
         
+        <!-- ONNX Runtime for ML Inference -->
+        <dependency>
+            <groupId>com.microsoft.onnxruntime</groupId>
+            <artifactId>onnxruntime</artifactId>
+            <version>1.26.0</version>
+        </dependency>
+        
         <!-- Lombok (Compile only) -->
         <dependency>
             <groupId>org.projectlombok</groupId>

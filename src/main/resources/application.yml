@@ -25,6 +25,7 @@ spring:
   
   # JPA / Hibernate Configuration
   jpa:
+    open-in-view: false
     hibernate:
       ddl-auto: none
     show-sql: false
@@ -37,6 +38,9 @@ spring:
   flyway:
     enabled: true
     baseline-on-migrate: true
+    ignore-migration-patterns:
+      - "*:future"
+      - "*:missing"
 
   # Redis Cache Configuration
   data:

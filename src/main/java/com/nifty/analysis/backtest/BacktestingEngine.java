@@ -4,6 +4,8 @@ import com.nifty.analysis.agent.DecisionAgent;
 import com.nifty.analysis.dto.OptionSnapshotDto;
 import com.nifty.analysis.engine.ConfidenceEngine;
 import com.nifty.analysis.agent.CriticAgent;
+import com.nifty.analysis.agent.TechnicalAgent;
+import com.nifty.analysis.service.OnnxModelService;
 import com.nifty.analysis.entity.MarketSnapshot;
 import com.nifty.analysis.entity.OptionSnapshot;
 import com.nifty.analysis.entity.TradeResult;
@@ -36,6 +38,8 @@ public class BacktestingEngine {
     
     private final TradeSignalRepository tradeSignalRepository;
     private final TradeResultRepository tradeResultRepository;
+    private final OnnxModelService onnxModelService;
+    private final TechnicalAgent technicalAgent;
 
     @Transactional
     public Map<String, Object> runBacktest(LocalDateTime start, LocalDateTime end) {
@@ -138,7 +142,17 @@ public class BacktestingEngine {
             )).toList();
 
             boolean isBullishBias = current.getEma20() != null && current.getEma50() != null && current.getNiftySpot() > current.getEma20();
-            double rawConf = confidenceEngine.calculateRawConfidence(current, optionDtos, spotChange, isBullishBias).rawConfidence();
+            
+            // Extract features and run ONNX model inference
+            TechnicalAgent.TechnicalFeatures features = technicalAgent.getFeatures(current);
+            double modelRawConfidence = onnxModelService.predictBullishProbability(
+                    features.rsi(),
+                    features.spotToEma20(),
+                    features.ema20ToEma50(),
+                    features.vix(),
+                    features.prevDailyReturn()
+            );
+            double rawConf = isBullishBias ? modelRawConfidence : 100.0 - modelRawConfidence;
             
             CriticAgent.CriticResult criticResult = criticAgent.evaluateAndApplyPenalties(rawConf, current, optionChain, isBullishBias);
 

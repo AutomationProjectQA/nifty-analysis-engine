@@ -22,7 +22,7 @@ public class MarketScheduler {
     @Value("${nifty.collector.market-hours-only:false}")
     private boolean marketHoursOnly;
 
-    @Scheduled(cron = "${nifty.cron:0 * * * * *}")
+    @Scheduled(cron = "${nifty.collector.cron:0 * * * * *}")
     public void collectData() {
         if (marketHoursOnly) {
             ZonedDateTime nowIst = ZonedDateTime.now(ZoneId.of("Asia/Kolkata"));

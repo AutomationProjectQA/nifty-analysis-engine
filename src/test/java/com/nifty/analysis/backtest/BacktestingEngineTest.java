@@ -3,6 +3,8 @@ package com.nifty.analysis.backtest;
 import com.nifty.analysis.dto.OptionSnapshotDto;
 import com.nifty.analysis.engine.ConfidenceEngine;
 import com.nifty.analysis.agent.CriticAgent;
+import com.nifty.analysis.agent.TechnicalAgent;
+import com.nifty.analysis.service.OnnxModelService;
 import com.nifty.analysis.entity.MarketSnapshot;
 import com.nifty.analysis.entity.OptionSnapshot;
 import com.nifty.analysis.entity.TradeSignal;
@@ -41,6 +43,10 @@ class BacktestingEngineTest {
     private TradeSignalRepository tradeSignalRepository;
     @Mock
     private TradeResultRepository tradeResultRepository;
+    @Mock
+    private OnnxModelService onnxModelService;
+    @Mock
+    private TechnicalAgent technicalAgent;
 
     private BacktestingEngine backtestingEngine;
 
@@ -52,7 +58,9 @@ class BacktestingEngineTest {
                 confidenceEngine,
                 criticAgent,
                 tradeSignalRepository,
-                tradeResultRepository
+                tradeResultRepository,
+                onnxModelService,
+                technicalAgent
         );
     }
 
@@ -98,9 +106,10 @@ class BacktestingEngineTest {
         when(optionSnapshotRepository.findBySnapshotTime(any(LocalDateTime.class)))
                 .thenReturn(List.of(opt));
 
-        // Mock confidence engine returning high confidence on first snap
-        ConfidenceEngine.RawConfidenceResult rawRes = new ConfidenceEngine.RawConfidenceResult(85.0, Collections.emptyMap());
-        when(confidenceEngine.calculateRawConfidence(any(), anyList(), anyDouble(), anyBoolean())).thenReturn(rawRes);
+        TechnicalAgent.TechnicalFeatures mockFeatures = new TechnicalAgent.TechnicalFeatures(50.0, 1.0, 1.0, 15.0, 0.0);
+        when(technicalAgent.getFeatures(any())).thenReturn(mockFeatures);
+        when(onnxModelService.predictBullishProbability(anyDouble(), anyDouble(), anyDouble(), anyDouble(), anyDouble()))
+                .thenReturn(85.0);
         
         CriticAgent.CriticResult critRes = new CriticAgent.CriticResult(85.0, Collections.emptyList());
         when(criticAgent.evaluateAndApplyPenalties(anyDouble(), any(), anyList(), anyBoolean())).thenReturn(critRes);
