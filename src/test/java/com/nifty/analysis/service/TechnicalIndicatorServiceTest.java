@@ -109,4 +109,28 @@ class TechnicalIndicatorServiceTest {
         // VWAP = 14108000 / 600 = 23513.33
         assertEquals(23513.33, vwap, 0.01);
     }
+
+    @Test
+    void testCalculateHourlyFeatures() {
+        List<MarketSnapshot> snapshots = new ArrayList<>();
+        LocalDateTime baseTime = LocalDateTime.of(2026, 6, 11, 9, 15, 0);
+        
+        for (int i = 0; i < 60; i++) {
+            MarketSnapshot s = new MarketSnapshot();
+            s.setSnapshotTime(baseTime.plusHours(i));
+            s.setNiftySpot(23000.0 + i * 5.0);
+            s.setIndiaVix(15.0);
+            s.setVolume(1000.0 * (i + 1));
+            snapshots.add(s);
+        }
+        
+        MarketSnapshot latest = snapshots.get(snapshots.size() - 1);
+        var features = technicalIndicatorService.calculateHourlyFeatures(latest, snapshots);
+        
+        assertNotNull(features);
+        assertTrue(features.rsi() >= 0.0 && features.rsi() <= 100.0);
+        assertTrue(features.spotToEma20() > 1.0);
+        assertTrue(features.ema20ToEma50() > 1.0);
+        assertEquals(15.0, features.vix());
+    }
 }

@@ -107,7 +107,7 @@ class BacktestingEngineTest {
                 .thenReturn(List.of(opt));
 
         TechnicalAgent.TechnicalFeatures mockFeatures = new TechnicalAgent.TechnicalFeatures(50.0, 1.0, 1.0, 15.0, 0.0, 0.015, 2.5, 1.2);
-        when(technicalAgent.getFeatures(any())).thenReturn(mockFeatures);
+        when(technicalAgent.getFeatures(any(MarketSnapshot.class), anyList())).thenReturn(mockFeatures);
         when(onnxModelService.predictBullishProbability(anyDouble(), anyDouble(), anyDouble(), anyDouble(), anyDouble(), anyDouble(), anyDouble(), anyDouble()))
                 .thenReturn(85.0);
         

@@ -45,10 +45,15 @@ public class BacktestingEngine {
     public Map<String, Object> runBacktest(LocalDateTime start, LocalDateTime end) {
         log.info("Starting historical backtesting simulation from {} to {}...", start, end);
         
-        // Fetch all market snapshots in the backtest range ordered chronologically
-        List<MarketSnapshot> snapshots = marketSnapshotRepository.findAll().stream()
-                .filter(s -> !s.getSnapshotTime().isBefore(start) && !s.getSnapshotTime().isAfter(end))
+        // Fetch all market snapshots including 10 days of history before the start date
+        LocalDateTime historyStart = start.minusDays(10);
+        List<MarketSnapshot> allSnapshots = marketSnapshotRepository.findAll().stream()
+                .filter(s -> !s.getSnapshotTime().isBefore(historyStart) && !s.getSnapshotTime().isAfter(end))
                 .sorted((s1, s2) -> s1.getSnapshotTime().compareTo(s2.getSnapshotTime()))
+                .toList();
+
+        List<MarketSnapshot> snapshots = allSnapshots.stream()
+                .filter(s -> !s.getSnapshotTime().isBefore(start))
                 .toList();
 
         if (snapshots.size() < 2) {
@@ -144,7 +149,7 @@ public class BacktestingEngine {
             boolean isBullishBias = current.getEma20() != null && current.getEma50() != null && current.getNiftySpot() > current.getEma20();
             
             // Extract features and run ONNX model inference
-            TechnicalAgent.TechnicalFeatures features = technicalAgent.getFeatures(current);
+            TechnicalAgent.TechnicalFeatures features = technicalAgent.getFeatures(current, allSnapshots);
             double modelRawConfidence = onnxModelService.predictBullishProbability(
                     features.rsi(),
                     features.spotToEma20(),

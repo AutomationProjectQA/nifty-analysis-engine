@@ -1,6 +1,7 @@
 package com.nifty.analysis.service;
 
 import com.nifty.analysis.entity.MarketSnapshot;
+import com.nifty.analysis.agent.TechnicalAgent;
 import com.nifty.analysis.repository.MarketSnapshotRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -254,6 +255,187 @@ public class TechnicalIndicatorService {
             return 1.0;
         }
         return Math.round((currentVolume / meanVolume) * 100.0) / 100.0;
+    }
+
+    public record MarketCandleDto(
+        LocalDateTime timestamp,
+        double open,
+        double high,
+        double low,
+        double close,
+        double volume
+    ) {}
+
+    public static LocalDateTime getHourlyCandleStart(LocalDateTime time) {
+        if (time.getMinute() < 15) {
+            return time.minusHours(1).withMinute(15).withSecond(0).withNano(0);
+        } else {
+            return time.withMinute(15).withSecond(0).withNano(0);
+        }
+    }
+
+    public List<MarketCandleDto> groupSnapshotsToHourlyCandles(List<MarketSnapshot> snapshots) {
+        List<MarketSnapshot> sorted = new ArrayList<>(snapshots);
+        sorted.sort((s1, s2) -> s1.getSnapshotTime().compareTo(s2.getSnapshotTime()));
+        
+        java.util.Map<LocalDateTime, List<MarketSnapshot>> grouped = new java.util.LinkedHashMap<>();
+        for (MarketSnapshot s : sorted) {
+            LocalDateTime key = getHourlyCandleStart(s.getSnapshotTime());
+            grouped.computeIfAbsent(key, k -> new ArrayList<>()).add(s);
+        }
+        
+        List<MarketCandleDto> candles = new ArrayList<>();
+        for (java.util.Map.Entry<LocalDateTime, List<MarketSnapshot>> entry : grouped.entrySet()) {
+            LocalDateTime key = entry.getKey();
+            List<MarketSnapshot> group = entry.getValue();
+            
+            double open = group.get(0).getNiftySpot();
+            double close = group.get(group.size() - 1).getNiftySpot();
+            double high = group.stream().mapToDouble(MarketSnapshot::getNiftySpot).max().orElse(close);
+            double low = group.stream().mapToDouble(MarketSnapshot::getNiftySpot).min().orElse(close);
+            
+            int firstIdx = sorted.indexOf(group.get(0));
+            double volumeBefore = 0.0;
+            if (firstIdx > 0) {
+                MarketSnapshot prev = sorted.get(firstIdx - 1);
+                if (prev.getSnapshotTime().toLocalDate().equals(key.toLocalDate())) {
+                    volumeBefore = prev.getVolume() != null ? prev.getVolume() : 0.0;
+                }
+            }
+            double volumeEnd = group.get(group.size() - 1).getVolume() != null ? group.get(group.size() - 1).getVolume() : 0.0;
+            double volume = Math.max(0.0, volumeEnd - volumeBefore);
+            
+            candles.add(new MarketCandleDto(key, open, high, low, close, volume));
+        }
+        return candles;
+    }
+
+    public TechnicalAgent.TechnicalFeatures calculateHourlyFeatures(MarketSnapshot latest, List<MarketSnapshot> allSnapshots) {
+        List<MarketSnapshot> snapshots;
+        LocalDateTime evaluationTime = latest.getSnapshotTime();
+        if (allSnapshots != null) {
+            snapshots = allSnapshots.stream()
+                    .filter(s -> !s.getSnapshotTime().isAfter(evaluationTime))
+                    .toList();
+        } else {
+            LocalDateTime tenDaysAgo = evaluationTime.minusDays(10);
+            snapshots = marketSnapshotRepository.findBetween(tenDaysAgo, evaluationTime);
+        }
+        
+        List<MarketCandleDto> candles = groupSnapshotsToHourlyCandles(snapshots);
+        return computeFeaturesFromHourlyCandles(candles, latest);
+    }
+
+    private TechnicalAgent.TechnicalFeatures computeFeaturesFromHourlyCandles(List<MarketCandleDto> candles, MarketSnapshot latest) {
+        double rsi = calculateSimpleRsi(candles);
+        
+        double ema20 = latest.getNiftySpot();
+        double ema50 = latest.getNiftySpot();
+        if (!candles.isEmpty()) {
+            double alpha20 = 2.0 / (20.0 + 1.0);
+            double alpha50 = 2.0 / (50.0 + 1.0);
+            ema20 = candles.get(0).close();
+            ema50 = candles.get(0).close();
+            for (int i = 1; i < candles.size(); i++) {
+                double close = candles.get(i).close();
+                ema20 = (close * alpha20) + (ema20 * (1.0 - alpha20));
+                ema50 = (close * alpha50) + (ema50 * (1.0 - alpha50));
+            }
+        }
+        
+        double spotToEma20 = ema20 > 0 ? latest.getNiftySpot() / ema20 : 1.0;
+        double ema20ToEma50 = ema50 > 0 ? ema20 / ema50 : 1.0;
+        
+        double vix = latest.getIndiaVix() != null ? latest.getIndiaVix() : 15.0;
+        double prevReturn = calculateYesterdayDailyReturn(latest.getSnapshotTime());
+        double bbWidth = calculateBbWidth(candles);
+        double macdHist = calculateMacdHist(candles);
+        double volumeRatio = calculateVolumeRatio(candles);
+        
+        return new TechnicalAgent.TechnicalFeatures(rsi, spotToEma20, ema20ToEma50, vix, prevReturn, bbWidth, macdHist, volumeRatio);
+    }
+
+    private double calculateSimpleRsi(List<MarketCandleDto> candles) {
+        if (candles.size() < 15) {
+            return 50.0;
+        }
+        int startIdx = candles.size() - 15;
+        double sumGain = 0.0;
+        double sumLoss = 0.0;
+        for (int i = startIdx + 1; i < candles.size(); i++) {
+            double diff = candles.get(i).close() - candles.get(i - 1).close();
+            if (diff > 0) {
+                sumGain += diff;
+            } else {
+                sumLoss += -diff;
+            }
+        }
+        double avgGain = sumGain / 14.0;
+        double avgLoss = sumLoss / 14.0;
+        double rs = avgGain / (avgLoss + 1e-9);
+        return Math.round((100.0 - (100.0 / (1.0 + rs))) * 100.0) / 100.0;
+    }
+
+    private double calculateBbWidth(List<MarketCandleDto> candles) {
+        if (candles.size() < 20) {
+            return 0.015;
+        }
+        int startIdx = candles.size() - 20;
+        double sum = 0.0;
+        for (int i = startIdx; i < candles.size(); i++) {
+            sum += candles.get(i).close();
+        }
+        double mean = sum / 20.0;
+        
+        double varianceSum = 0.0;
+        for (int i = startIdx; i < candles.size(); i++) {
+            varianceSum += Math.pow(candles.get(i).close() - mean, 2);
+        }
+        double std = Math.sqrt(varianceSum / 19.0);
+        return Math.round(((2.0 * std) / (mean + 1e-9)) * 10000.0) / 10000.0;
+    }
+
+    private double calculateMacdHist(List<MarketCandleDto> candles) {
+        if (candles.isEmpty()) {
+            return 0.0;
+        }
+        double ema12 = candles.get(0).close();
+        double ema26 = candles.get(0).close();
+        double alpha12 = 2.0 / (12.0 + 1.0);
+        double alpha26 = 2.0 / (26.0 + 1.0);
+        
+        double[] macd = new double[candles.size()];
+        macd[0] = ema12 - ema26;
+        
+        for (int i = 1; i < candles.size(); i++) {
+            double close = candles.get(i).close();
+            ema12 = (close * alpha12) + (ema12 * (1.0 - alpha12));
+            ema26 = (close * alpha26) + (ema26 * (1.0 - alpha26));
+            macd[i] = ema12 - ema26;
+        }
+        
+        double signal = macd[0];
+        double alpha9 = 2.0 / (9.0 + 1.0);
+        for (int i = 1; i < macd.length; i++) {
+            signal = (macd[i] * alpha9) + (signal * (1.0 - alpha9));
+        }
+        
+        double latestMacd = macd[macd.length - 1];
+        return Math.round((latestMacd - signal) * 100.0) / 100.0;
+    }
+
+    private double calculateVolumeRatio(List<MarketCandleDto> candles) {
+        if (candles.size() < 20) {
+            return 1.0;
+        }
+        int startIdx = candles.size() - 20;
+        double sum = 0.0;
+        for (int i = startIdx; i < candles.size(); i++) {
+            sum += candles.get(i).volume();
+        }
+        double mean = sum / 20.0;
+        double currentVol = candles.get(candles.size() - 1).volume();
+        return Math.round((currentVol / (mean + 1e-9)) * 100.0) / 100.0;
     }
 }
 

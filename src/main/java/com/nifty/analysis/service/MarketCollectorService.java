@@ -112,8 +112,11 @@ public class MarketCollectorService {
             redisService.saveLatestOptionChain(optionSnapshots);
             log.info("Option Chain snapshot persisted ({} strikes, Max Pain={})", optionSnapshots.size(), calculatedMaxPain);
 
-            // 3. Update Market Candle (5-minute Timeframe)
+            // 3. Update Market Candles (5m, 15m, 30m, 60m Timeframes)
             updateCandle(marketData.niftySpot(), marketData.volume(), now, "5m");
+            updateCandle(marketData.niftySpot(), marketData.volume(), now, "15m");
+            updateCandle(marketData.niftySpot(), marketData.volume(), now, "30m");
+            updateCandle(marketData.niftySpot(), marketData.volume(), now, "60m");
 
             // 4. Trigger Decision Agent signal evaluations
             decisionAgent.evaluateMarketForSignals(snapshot, prevSnapshot.map(MarketSnapshot::getNiftySpot).orElse(null));
@@ -127,8 +130,25 @@ public class MarketCollectorService {
     }
 
     private void updateCandle(double spot, double totalVolume, LocalDateTime now, String timeframe) {
-        // Calculate the start time of the current 5-minute candle
-        LocalDateTime candleStart = roundToTimeframe(now, 5);
+        int minutes = 5;
+        if ("15m".equals(timeframe)) {
+            minutes = 15;
+        } else if ("30m".equals(timeframe)) {
+            minutes = 30;
+        } else if ("60m".equals(timeframe)) {
+            minutes = 60;
+        }
+        LocalDateTime candleStart = roundToTimeframe(now, minutes);
+        
+        // Find volume at the start of the timeframe
+        double volumeBefore = 0.0;
+        Optional<MarketSnapshot> prevSnap = marketSnapshotRepository.findLatestBefore(candleStart);
+        if (prevSnap.isPresent()) {
+            if (prevSnap.get().getSnapshotTime().toLocalDate().equals(candleStart.toLocalDate())) {
+                volumeBefore = prevSnap.get().getVolume() != null ? prevSnap.get().getVolume() : 0.0;
+            }
+        }
+        double currentCandleVolume = Math.max(0.0, totalVolume - volumeBefore);
         
         // Find existing candle for the timeframe and start time
         List<MarketCandle> existingCandles = marketCandleRepository.findLatestByTimeframe(timeframe, 1);
@@ -136,29 +156,24 @@ public class MarketCollectorService {
         MarketCandle candle;
         if (!existingCandles.isEmpty() && existingCandles.getFirst().getTimestamp().equals(candleStart)) {
             candle = existingCandles.getFirst();
-            // Update candle
             candle.setHigh(Math.max(candle.getHigh(), spot));
             candle.setLow(Math.min(candle.getLow(), spot));
             candle.setClose(spot);
-            
-            // Estimate incremental volume
-            double volumeDiff = Math.max(0.0, totalVolume - candle.getVolume());
-            candle.setVolume(candle.getVolume() + volumeDiff);
+            candle.setVolume(currentCandleVolume);
         } else {
-            // Create a new candle
             candle = new MarketCandle();
             candle.setTimestamp(candleStart);
             candle.setOpen(spot);
             candle.setHigh(spot);
             candle.setLow(spot);
             candle.setClose(spot);
-            candle.setVolume(0.0); // Will align with volume updates
+            candle.setVolume(currentCandleVolume);
             candle.setTimeframe(timeframe);
         }
         
         marketCandleRepository.save(candle);
-        log.debug("Candle ({}) updated: Timestamp={}, Open={}, Close={}", 
-                timeframe, candle.getTimestamp(), candle.getOpen(), candle.getClose());
+        log.debug("Candle ({}) updated: Timestamp={}, Open={}, Close={}, Volume={}", 
+                timeframe, candle.getTimestamp(), candle.getOpen(), candle.getClose(), candle.getVolume());
     }
 
     private LocalDateTime roundToTimeframe(LocalDateTime time, int minutes) {
