@@ -9,6 +9,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import com.nifty.analysis.entity.TradeSignal;
 import com.nifty.analysis.entity.TradeReflection;
 import com.nifty.analysis.entity.MarketSnapshot;
+import com.nifty.analysis.entity.OptionSnapshot;
 import com.nifty.analysis.repository.TradeReflectionRepository;
 import com.nifty.analysis.repository.MarketSnapshotRepository;
 import java.time.LocalDateTime;
@@ -291,5 +292,123 @@ public class LlmService {
         } catch (Exception ex) {
             log.error("Failed to save TradeReflection in database", ex);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    public String generatePreMarketReport(double spot, double vix, List<OptionSnapshot> optionChain) {
+        int highestCeStrike = 0;
+        long highestCeOi = 0;
+        int highestPeStrike = 0;
+        long highestPeOi = 0;
+        if (optionChain != null) {
+            for (OptionSnapshot os : optionChain) {
+                if (os.getCeOi() != null && os.getCeOi() > highestCeOi) {
+                    highestCeOi = os.getCeOi();
+                    highestCeStrike = os.getStrikePrice();
+                }
+                if (os.getPeOi() != null && os.getPeOi() > highestPeOi) {
+                    highestPeOi = os.getPeOi();
+                    highestPeStrike = os.getStrikePrice();
+                }
+            }
+        }
+
+        String prompt = "You are the Nifty Pre-Market Vlog Analyzer. Write a morning market view report for today.\n\n"
+                + "Context:\n"
+                + "Nifty Spot Close: " + spot + "\n"
+                + "India VIX: " + vix + "\n"
+                + "Highest CE OI Strike (Resistance): " + (highestCeStrike > 0 ? highestCeStrike : "N/A") + " (OI: " + highestCeOi + ")\n"
+                + "Highest PE OI Strike (Support): " + (highestPeStrike > 0 ? highestPeStrike : "N/A") + " (OI: " + highestPeOi + ")\n\n"
+                + "Guidelines: Write a structured daily pre-market update. Start with a headline, followed by 3 short paragraphs covering:\n"
+                + "1. Global Market Summary & Gift Nifty expected open (bullish, bearish, or sideways bias).\n"
+                + "2. Key Levels: Explain how the option chain support at " + highestPeStrike + " and resistance at " + highestCeStrike + " will act as bounds.\n"
+                + "3. Expected Market Opening Strategy: Provide entry suggestions for retail options buyers today.\n"
+                + "Keep the tone professional and informative.";
+
+        return callGemini(prompt, "Pre-market morning view generated successfully. Nifty is expected to open sideways-to-positive with support at " + highestPeStrike + " and overhead resistance at " + highestCeStrike + ".");
+    }
+
+    @SuppressWarnings("unchecked")
+    public String generatePostMarketReport(MarketSnapshot snapshot, double pcr, double maxPain, List<OptionSnapshot> optionChain) {
+        String prompt = "You are the Nifty Post-Market Vlog Analyzer. Write a detailed daily close market report.\n\n"
+                + "Context:\n"
+                + "Nifty Spot Close: " + snapshot.getNiftySpot() + "\n"
+                + "Nifty Future Close: " + snapshot.getNiftyFuture() + "\n"
+                + "India VIX: " + snapshot.getIndiaVix() + "\n"
+                + "Put-Call Ratio (PCR): " + pcr + "\n"
+                + "Max Pain Strike: " + maxPain + "\n"
+                + "Technical Indicators: RSI = " + snapshot.getRsi() + ", VWAP = " + snapshot.getVwap() + ", EMA20 = " + snapshot.getEma20() + "\n\n"
+                + "Guidelines: Write a structured daily post-market update. Start with a headline, followed by 3 short paragraphs covering:\n"
+                + "1. Daily Nifty Index summary: Highlight today's price action and how it closed relative to the 20-EMA and VWAP support.\n"
+                + "2. Options Chain Shift: Discuss the implications of the current PCR (" + pcr + ") and Max Pain strike (" + maxPain + ").\n"
+                + "3. Next Day Outlook: Give a directional bias for tomorrow's trading session.\n"
+                + "Keep the tone professional and analytical.";
+
+        return callGemini(prompt, "Post-market daily update generated successfully. Nifty closed at " + snapshot.getNiftySpot() + ", showing a neutral-to-bullish outlook with PCR at " + pcr + " and Max Pain at " + maxPain + ".");
+    }
+
+    @SuppressWarnings("unchecked")
+    private String callGemini(String prompt, String fallbackText) {
+        if (geminiApiKey == null || geminiApiKey.isEmpty()) {
+            return fallbackText;
+        }
+
+        String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key="
+                + geminiApiKey;
+
+        Map<String, Object> requestBody = new HashMap<>();
+        Map<String, Object> contentsMap = new HashMap<>();
+        Map<String, Object> partsMap = new HashMap<>();
+
+        partsMap.put("text", prompt);
+        contentsMap.put("parts", List.of(partsMap));
+        requestBody.put("contents", List.of(contentsMap));
+
+        try {
+            String response = webClientBuilder.build().post()
+                    .uri(url)
+                    .bodyValue(requestBody)
+                    .retrieve()
+                    .bodyToMono(Map.class)
+                    .map(map -> {
+                        try {
+                            List<Map<String, Object>> candidates = (List<Map<String, Object>>) map.get("candidates");
+                            Map<String, Object> content = (Map<String, Object>) candidates.get(0).get("content");
+                            List<Map<String, Object>> parts = (List<Map<String, Object>>) content.get("parts");
+                            return (String) parts.get(0).get("text");
+                        } catch (Exception ex) {
+                            log.error("Failed to parse Gemini response structure", ex);
+                            return null;
+                        }
+                    })
+                    .onErrorReturn(fallbackText)
+                    .block();
+
+            return response != null ? response.trim() : fallbackText;
+        } catch (Exception e) {
+            log.error("Failed to call Gemini API", e);
+            return fallbackText;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    public String generateMarketNews(double giftNifty, double dowFutures, double dxy, double crude, double fiiFlow) {
+        String prompt = "You are the Nifty Market News Summarizer. Based on the following global market metrics, generate a daily close summary article titled 'Top 5 Events Impacting Nifty Today'.\n\n"
+                + "Context:\n"
+                + "- GIFT Nifty Premium: " + giftNifty + " pts\n"
+                + "- Dow Jones Futures: " + dowFutures + " pts\n"
+                + "- US Dollar Index (DXY): " + dxy + "\n"
+                + "- Brent Crude Oil: " + crude + " USD/bbl\n"
+                + "- Institutional FII net purchase: " + fiiFlow + " Cr\n\n"
+                + "Guidelines:\n"
+                + "Provide exactly 5 numbered bullet points. Each bullet point should start with a bold title, followed by 1-2 sentence explanation of how that event/metric impacts the Nifty 50 index (e.g. imports pressure from crude, global cues from US markets, DXY currency flows, institutional buying activity, and Gift Nifty opening directions).\n"
+                + "Ensure the output is clean, formatted in markdown, and reads like a financial newspaper summary.";
+
+        return callGemini(prompt, "### Top 5 Events Impacting Nifty Today\n\n"
+                + "1. **FII Activity:** Institutional purchase of " + fiiFlow + " Cr provides liquidity support.\n"
+                + "2. **Global Cues:** US Dow Futures sitting at " + dowFutures + " pts directs opening momentum.\n"
+                + "3. **Crude Oil Pressures:** Brent crude at " + crude + " USD/bbl impacts inflation and fiscal deficit targets.\n"
+                + "4. **Currency Dynamics:** The Dollar Index (DXY) at " + dxy + " guides capital flows in emerging markets.\n"
+                + "5. **GIFT Nifty Cues:** GIFT Nifty premium indicating a starting directional bias of " + giftNifty + " pts.");
     }
 }

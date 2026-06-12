@@ -45,4 +45,7 @@ public class TradeSignal {
 
     @Column(name = "status", nullable = false, length = 20)
     private String status; // "ACTIVE", "COMPLETED", "FAILED"
+
+    @Column(name = "thesis", columnDefinition = "TEXT")
+    private String thesis;
 }

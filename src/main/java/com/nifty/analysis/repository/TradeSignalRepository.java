@@ -13,4 +13,6 @@ public interface TradeSignalRepository extends JpaRepository<TradeSignal, Long> 
     java.util.Optional<TradeSignal> findFirstByStrikeAndSignalTypeAndStatus(int strike, String signalType, String status);
     
     List<TradeSignal> findBySignalTimeAfter(java.time.LocalDateTime time);
+
+    List<TradeSignal> findAllByOrderBySignalTimeDesc();
 }

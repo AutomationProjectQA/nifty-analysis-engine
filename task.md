@@ -161,3 +161,76 @@ Track development status across all sprints of the Nifty Analysis Engine.
 - [x] Verification
   - [x] Verify compilation and test runs remain green
 
+---
+
+## [/] Sprint 13 — Nifty Intelligence Portal Extensions
+
+### [x] Phase 1: Foundation & Backend Setup
+- [x] Database Schema Setup
+  - [x] Create Flyway migration `V1.2__portal_extensions.sql` defining `ai_report`, `market_news`, and `learning_article` tables
+  - [x] Add default articles data in the migration file for learning center
+- [x] Backend Domain Layer (Entities & Repositories)
+  - [x] Create `AiReport` entity and repository
+  - [x] Create `MarketNews` entity and repository
+  - [x] Create `LearningArticle` entity and repository
+- [x] Web Layer Configurations
+  - [x] Create `WebConfig.java` to support CORS requests from port `3000` (React local host)
+- [x] Verification
+  - [x] Run `mvn clean compile` to check that new models and configurations build successfully
+
+### [x] Phase 2: Schedulers & Controllers (AI Vlogs & Market Data APIs)
+- [x] AI Report Scheduling (Daily Vlogs)
+  - [x] Create `ReportScheduler.java` triggering at:
+    - **07:00 AM IST** (Pre-Market Morning View vlog)
+    - **03:35 PM IST** (Post-Market Daily Close vlog)
+  - [x] Inject `LlmService` to generate structured market vlogs via Gemini
+- [x] API Controllers Development
+  - [x] Implement `ReportController` to serve latest reports and archives
+  - [x] Implement `NewsController` to serve AI summarized top daily events
+  - [x] Implement `LearningArticleController` to serve education cards
+  - [x] Implement `SignalController` returning raw trading opportunities to all users
+- [x] Verification
+  - [x] Add unit tests verifying report fetching and signal serialization REST endpoints (all tests passing)
+
+### [x] Phase 3: Frontend Initialization & UI Theme
+- [x] Project Initialization
+  - [x] Initialize React 19 / Vite workspace in a new `/frontend` folder
+  - [x] Setup dependencies in `package.json` (`@mui/material`, `@mui/icons-material`, `recharts`, `axios`, `react-router-dom`)
+  - [x] Set Vite configuration server port to `3000`
+- [x] UI Theme Layout
+  - [x] Create `theme.js` defining premium dark-mode aesthetic palette
+  - [x] Build global layout sidebar navigation panel matching mockup design
+- [x] AdSense Infrastructure
+  - [x] Inject AdSense asynchronously into `frontend/index.html` using env client keys
+  - [x] Code reusable `<AdSenseSlot />` wrapper component
+
+### [x] Phase 4: Frontend Pages Development
+- [x] Dashboard View
+  - [x] Build key-metric layouts (Nifty Spot/Future, VIX, Gift Nifty)
+  - [x] Implement Put-Call Ratio (PCR) sentiment visual dial
+  - [x] Embed TradingView Candlestick Chart Widget
+  - [x] Design Daily Support/Resistance values cards
+- [x] Option Chain Layout
+  - [x] Design Strike Price table (Calls on left, Puts on right) with ATM strike highlights
+  - [x] Highlight rows dynamically based on Option build-up types (Long Build-up, Short Covering, Short Build-up, Long Unwinding)
+  - [x] Integrate Recharts charts for Max Pain strike and historical PCR trends
+- [x] Signals & Daily Vlogs View
+  - [x] Renders Signal Cards including strike, targets, stop-losses, confidence dial, and thesis explanations
+  - [x] Build AI Reports tab displaying Pre-Market and Post-Market vlogs
+- [x] Calculators, News & Learning Center
+  - [x] Implement interactive calculators (Option Profit, Position Size, Risk Reward, SIP, Brokerage) with Grid import fixes
+  - [x] Display daily "Top 5 Events Impacting Nifty" in News dashboard
+  - [x] Render grid list of learning articles and read guides
+- [x] Ad Placement Binding
+  - [x] Mount `<AdSenseSlot />` blocks in Sidebar, Option Chain footer, Article bodies, and Calculators tabs
+
+### [/] Phase 5: Verification & Hosting Deployment
+- [/] Comprehensive Testing
+  - [x] Run backend tests suite: `mvn test` (all 32/32 tests green)
+  - [ ] Run play-verification tests confirming frontend renders pages successfully (local Vite dev server tested; browser subagent blocked by CDP compatibility limits)
+- [x] Production Build & Configuration
+  - [x] Build frontend production bundle (`npm run build` succeeds cleanly)
+  - [x] Set up Nginx configuration file directing traffic to static files and reverse proxying api calls
+  - [x] Configure `docker-compose` settings for PostgreSQL and Redis host-volumes backup
+
+

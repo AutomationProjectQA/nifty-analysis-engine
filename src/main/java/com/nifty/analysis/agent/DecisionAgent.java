@@ -185,6 +185,9 @@ public class DecisionAgent {
                 rawResult.factorScores(), 
                 criticSummary.toString()
         );
+        
+        signal.setThesis(explanation);
+        tradeSignalRepository.save(signal);
 
         // 8. Notify via Telegram Bot
         List<String> reasons = new ArrayList<>();
