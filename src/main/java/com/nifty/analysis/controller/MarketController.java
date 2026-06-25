@@ -28,6 +28,22 @@ public class MarketController {
     private final MarketSnapshotRepository marketSnapshotRepository;
     private final OptionSnapshotRepository optionSnapshotRepository;
     private final com.nifty.analysis.service.OptionPremiumService optionPremiumService;
+    private final com.nifty.analysis.service.DataFeedStatus dataFeedStatus;
+
+    @org.springframework.beans.factory.annotation.Value("${nifty.collector.provider:angelone}")
+    private String provider;
+
+    /** Whether the market data currently flowing is live or a simulated fallback. */
+    @GetMapping("/market/feed-status")
+    public ResponseEntity<java.util.Map<String, Object>> getFeedStatus() {
+        boolean live = !"angelone".equalsIgnoreCase(provider) ? false : dataFeedStatus.isLive();
+        return ResponseEntity.ok(java.util.Map.of(
+                "dataSource", live ? "LIVE" : "SIMULATED",
+                "live", live,
+                "provider", provider,
+                "lastUpdatedIst", dataFeedStatus.getLastUpdatedIst() == null ? "" : dataFeedStatus.getLastUpdatedIst()
+        ));
+    }
 
     @PostMapping("/market/collect")
     public ResponseEntity<String> forceCollect() {

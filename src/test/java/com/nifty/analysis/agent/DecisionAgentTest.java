@@ -50,6 +50,7 @@ class DecisionAgentTest {
     @Mock private MarketAgent marketAgent;
     @Mock private LiquidityAgent liquidityAgent;
     @Mock private EntryTimingAgent entryTimingAgent;
+    @Mock private RiskAgent riskAgent;
     @Mock private MarketRegimeAgent marketRegimeAgent;
     @Mock private MarketSnapshotRepository marketSnapshotRepository;
     @Mock private TradeSignalRepository tradeSignalRepository;
@@ -93,6 +94,9 @@ class DecisionAgentTest {
         // Strikes are liquid by default; the per-strike liquidity gate passes.
         lenient().when(liquidityAgent.evaluateStrike(any(), anyBoolean()))
                 .thenReturn(new AgentResponse(100.0, "BULLISH", List.of()));
+        // Risk advisory stub (advisory only — does not block signals).
+        lenient().when(riskAgent.evaluateRisk(anyDouble(), anyDouble(), anyDouble(), anyDouble()))
+                .thenReturn(new AgentResponse(30.0, "NEUTRAL", List.of("Unfavorable Risk/Reward ratio (1:0.03).")));
 
         latest = new MarketSnapshot();
         latest.setSnapshotTime(now);

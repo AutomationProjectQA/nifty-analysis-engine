@@ -83,6 +83,7 @@ public class DecisionAgent {
     private final MarketAgent marketAgent;
     private final LiquidityAgent liquidityAgent;
     private final EntryTimingAgent entryTimingAgent;
+    private final RiskAgent riskAgent;
 
     private final MarketRegimeAgent marketRegimeAgent;
     private final MarketSnapshotRepository marketSnapshotRepository;
@@ -238,10 +239,11 @@ public class DecisionAgent {
         // most reliably; ATM/OTM add trade count.
         List<Integer> candidateStrikes = buildCandidateStrikes(atmStrike, isBullish);
         int emitted = 0;
+        double vix = latest.getIndiaVix();
         for (int strike : candidateStrikes) {
             if (emitSignalForStrike(strike, signalType, isBullish, spotPrice, finalConfidence,
                     modelConfidence, agentConfidence, rawConfidence, modelReady, rawResult, criticResult,
-                    optionChainEntities, thesis)) {
+                    optionChainEntities, thesis, vix)) {
                 emitted++;
             }
         }
@@ -263,7 +265,7 @@ public class DecisionAgent {
     private boolean emitSignalForStrike(int strike, String signalType, boolean isBullish, double spotPrice,
             double finalConfidence, double modelConfidence, double agentConfidence, double rawConfidence,
             boolean modelReady, ConfidenceEngine.RawConfidenceResult rawResult, CriticAgent.CriticResult criticResult,
-            List<OptionSnapshot> optionChainEntities, String thesis) {
+            List<OptionSnapshot> optionChainEntities, String thesis, double vix) {
 
         // Per-strike duplicate guard
         if (tradeSignalRepository.findFirstByStrikeAndSignalTypeAndStatus(strike, signalType, "ACTIVE").isPresent()) {
@@ -296,6 +298,15 @@ public class DecisionAgent {
         double stopLoss = round2(entry * (1.0 - stopLossPercent / 100.0));
         int quantity = orderExecutionService.calculateQuantity(entry);
 
+        // Risk assessment (advisory): evaluate R:R + volatility risk. Surfaced/logged for
+        // every signal — NOT a hard block (the configured 2% target / 40% stop intentionally
+        // scores low here; blocking would suppress all trades).
+        AgentResponse risk = riskAgent.evaluateRisk(entry, stopLoss, target1, vix);
+        if (!"BULLISH".equals(risk.bias())) {
+            log.warn("Risk advisory UNFAVOURABLE for {} {} (score={}%): {}", signalType, strike,
+                    round2(risk.score()), String.join("; ", risk.comments()));
+        }
+
         TradeSignal signal = new TradeSignal();
         signal.setSignalTime(LocalDateTime.now());
         signal.setSignalType(signalType);
@@ -324,6 +335,8 @@ public class DecisionAgent {
                 String.format("After critic penalties; gating threshold = %.1f%%", gatingThreshold)));
         explanations.add(explanation("Liquidity", round2(liquidity.score()),
                 "Strike liquidity score (" + strikeClass(strike, spotPrice, isBullish) + ")"));
+        explanations.add(explanation("Risk_RR", round2(risk.score()),
+                "Risk advisory: " + String.join("; ", risk.comments())));
         for (Map.Entry<String, Double> entryScore : rawResult.factorScores().entrySet()) {
             explanations.add(explanation(entryScore.getKey(), entryScore.getValue(),
                     "Factor raw score = " + entryScore.getValue()));
@@ -342,6 +355,7 @@ public class DecisionAgent {
         reasons.add("*Thesis:* " + thesis);
         reasons.add(isBullish ? "Bullish trend structure" : "Bearish trend structure");
         reasons.add("Strike " + strike + " (" + strikeClass(strike, spotPrice, isBullish) + ") — liquidity confirmed");
+        reasons.add((("BULLISH".equals(risk.bias())) ? "Risk OK: " : "⚠️ Risk: ") + String.join("; ", risk.comments()));
         for (CriticAgent.PenaltyDetails p : criticResult.appliedPenalties()) {
             reasons.add("Critic Penalty: " + p.comment());
         }

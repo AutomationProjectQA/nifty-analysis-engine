@@ -44,6 +44,7 @@ public class MarketCollectorService {
     private final TechnicalIndicatorService technicalIndicatorService;
     private final OptionsIndicatorService optionsIndicatorService;
     private final OptionPricingService optionPricingService;
+    private final OptionPremiumService optionPremiumService;
     private final DecisionAgent decisionAgent;
     private final TelegramBotService telegramBotService;
     private final LlmService llmService;
@@ -205,6 +206,18 @@ public class MarketCollectorService {
             return;
         }
 
+        // Theoretical premiums (Black-Scholes from live IV, with real delta + theta) — used
+        // ONLY as a fallback when the live LTP is unavailable. Far more accurate than the old
+        // flat-0.5-delta proxy. Built once per cycle; failure leaves the map empty (safe).
+        java.util.Map<Integer, com.nifty.analysis.dto.OptionPremiumDto.StrikePremium> theoByStrike = new java.util.HashMap<>();
+        try {
+            for (com.nifty.analysis.dto.OptionPremiumDto.StrikePremium p : optionPremiumService.latestPremiums().premiums()) {
+                theoByStrike.put(p.strike(), p);
+            }
+        } catch (Exception e) {
+            log.warn("Could not compute theoretical premiums for trade resolution: {}", e.getMessage());
+        }
+
         double spot = latest.getNiftySpot();
         for (TradeSignal signal : activeSignals) {
             Optional<MarketSnapshot> entrySnapshot = marketSnapshotRepository.findLatestBefore(signal.getSignalTime());
@@ -212,13 +225,23 @@ public class MarketCollectorService {
 
             boolean isCall = "BUY_CE".equals(signal.getSignalType());
 
-            // Prefer the real live option premium; fall back to a spot-delta approximation
-            // when a live price is unavailable (simulation / no broker session).
+            // 1. Prefer the real LIVE option premium (reflects the true market delta).
             double currentOptionPrice = optionPricingService.getOptionLtp(signal.getSignalType(), signal.getStrike());
+
+            // 2. Fallback: Black-Scholes theoretical premium (real delta + theta), NOT a flat 0.5 proxy.
             if (currentOptionPrice <= 0) {
-                currentOptionPrice = isCall
-                        ? signal.getEntry() + (spot - entrySpot) * 0.5
-                        : signal.getEntry() + (entrySpot - spot) * 0.5;
+                com.nifty.analysis.dto.OptionPremiumDto.StrikePremium theo = theoByStrike.get(signal.getStrike());
+                if (theo != null) {
+                    currentOptionPrice = isCall ? theo.cePremium() : theo.pePremium();
+                }
+            }
+
+            // 3. If neither a live nor a theoretical price is available, do NOT resolve on a
+            // fabricated price — leave the trade ACTIVE and re-check next cycle.
+            if (currentOptionPrice <= 0) {
+                log.warn("No live or theoretical premium for signal id={} ({} {}). Leaving ACTIVE this cycle.",
+                        signal.getId(), signal.getSignalType(), signal.getStrike());
+                continue;
             }
             currentOptionPrice = Math.round(currentOptionPrice * 100.0) / 100.0;
 

@@ -28,6 +28,7 @@ class RiskGuardServiceTest {
 
     @Mock private TradeSignalRepository tradeSignalRepository;
     @Mock private TradeResultRepository tradeResultRepository;
+    @Mock private DataFeedStatus dataFeedStatus;
 
     @InjectMocks
     private RiskGuardService riskGuardService;
@@ -37,6 +38,36 @@ class RiskGuardServiceTest {
         ReflectionTestUtils.setField(riskGuardService, "tradingEnabled", true);
         ReflectionTestUtils.setField(riskGuardService, "maxTradesPerDay", 5);
         ReflectionTestUtils.setField(riskGuardService, "maxLossPerDay", 1000.0);
+        ReflectionTestUtils.setField(riskGuardService, "provider", "angelone");
+        ReflectionTestUtils.setField(riskGuardService, "blockOnSimulatedData", true);
+        // Live data by default so the existing limit tests behave normally.
+        lenient().when(dataFeedStatus.isLive()).thenReturn(true);
+    }
+
+    @Test
+    void simulatedData_blocksNewTrade() {
+        when(dataFeedStatus.isLive()).thenReturn(false);
+        RiskGuardService.RiskCheck check = riskGuardService.canOpenNewTrade();
+        assertFalse(check.allowed());
+        assertTrue(check.reason().toLowerCase().contains("simulated"));
+    }
+
+    @Test
+    void liveData_doesNotBlockOnDataSource() {
+        when(dataFeedStatus.isLive()).thenReturn(true);
+        when(tradeSignalRepository.findBySignalTimeAfter(any())).thenReturn(new ArrayList<>());
+        RiskGuardService.RiskCheck check = riskGuardService.canOpenNewTrade();
+        assertTrue(check.allowed());
+    }
+
+    @Test
+    void simulatedProvider_neverBlocksOnDataSource() {
+        // Pure simulated/demo mode is intentional: the provider check short-circuits
+        // before isLive() is consulted, so a degraded feed must not block here.
+        ReflectionTestUtils.setField(riskGuardService, "provider", "simulated");
+        when(tradeSignalRepository.findBySignalTimeAfter(any())).thenReturn(new ArrayList<>());
+        RiskGuardService.RiskCheck check = riskGuardService.canOpenNewTrade();
+        assertTrue(check.allowed());
     }
 
     private TradeSignal signal(long id) {

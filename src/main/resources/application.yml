@@ -124,6 +124,11 @@ nifty:
     # Stop-loss as a percent of the entry premium.
     stop-loss-percent: 40.0
 
+    # Refuse to open new trades when the live broker feed has degraded to SIMULATED
+    # data (prevents trading on fabricated prices). Only applies in provider=angelone
+    # mode; pure simulated mode is unaffected. Kill-switch: set false to disable.
+    block-on-simulated-data: true
+
     # Maximum number of NEW trades to open per trading day.
     max-trades-per-day: 50
 

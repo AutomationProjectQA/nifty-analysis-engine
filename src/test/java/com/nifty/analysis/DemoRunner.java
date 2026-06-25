@@ -56,7 +56,7 @@ public class DemoRunner {
 
         // 2. Initialize Angel One client
         WebClient.Builder webClientBuilder = WebClient.builder();
-        AngelOneDataClient client = new AngelOneDataClient(webClientBuilder);
+        AngelOneDataClient client = new AngelOneDataClient(webClientBuilder, new com.nifty.analysis.service.DataFeedStatus());
         setField(client, "apiKey", apiKey);
         setField(client, "clientCode", clientCode);
         setField(client, "password", password);

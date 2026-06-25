@@ -58,6 +58,8 @@ class MarketCollectorServiceTest {
     @Mock
     private OptionPricingService optionPricingService;
     @Mock
+    private OptionPremiumService optionPremiumService;
+    @Mock
     private DecisionAgent decisionAgent;
     @Mock
     private TelegramBotService telegramBotService;
@@ -89,6 +91,7 @@ class MarketCollectorServiceTest {
                 technicalIndicatorService,
                 optionsIndicatorService,
                 optionPricingService,
+                optionPremiumService,
                 decisionAgent,
                 telegramBotService,
                 llmService,
@@ -96,6 +99,9 @@ class MarketCollectorServiceTest {
                 confidenceWeightTuner
         );
         ReflectionTestUtils.setField(marketCollectorService, "lotSize", 65);
+        // No theoretical-premium fallback by default; individual tests override as needed.
+        lenient().when(optionPremiumService.latestPremiums())
+                .thenReturn(new com.nifty.analysis.dto.OptionPremiumDto.Response(0.0, "", 0, List.of()));
     }
 
     @Test
@@ -165,9 +171,12 @@ class MarketCollectorServiceTest {
         entrySnap.setNiftySpot(23500.0);
         when(marketSnapshotRepository.findLatestBefore(any(LocalDateTime.class))).thenReturn(Optional.of(entrySnap));
 
+        // Live LTP at/above Target2 (180) — resolves via the real market premium.
+        when(optionPricingService.getOptionLtp("BUY_CE", 23500)).thenReturn(182.5);
+
         MarketSnapshot latestSnap = new MarketSnapshot();
         latestSnap.setSnapshotTime(LocalDateTime.now());
-        latestSnap.setNiftySpot(23565.0); // 150 + 65*0.5 = 182.5 (hits target2 >= 180.0)
+        latestSnap.setNiftySpot(23565.0);
 
         // Act
         marketCollectorService.updateActiveTrades(latestSnap);
@@ -177,6 +186,71 @@ class MarketCollectorServiceTest {
         verify(tradeSignalRepository, times(1)).save(activeSignal);
         verify(tradeResultRepository, times(1)).save(any(TradeResult.class));
         verify(telegramBotService, times(1)).sendMessage(contains("TARGET 2 HIT"));
+    }
+
+    @Test
+    void testUpdateActiveTrades_BlackScholesFallbackWhenNoLiveLtp() {
+        // No live LTP available → resolution must use the Black-Scholes theoretical premium,
+        // NOT the old flat-0.5 proxy.
+        TradeSignal activeSignal = new TradeSignal();
+        activeSignal.setId(11L);
+        activeSignal.setSignalTime(LocalDateTime.now().minusMinutes(5));
+        activeSignal.setSignalType("BUY_CE");
+        activeSignal.setStrike(23500);
+        activeSignal.setEntry(150.0);
+        activeSignal.setStopLoss(135.0);
+        activeSignal.setTarget1(165.0);
+        activeSignal.setTarget2(180.0);
+        activeSignal.setStatus("ACTIVE");
+
+        when(tradeSignalRepository.findByStatus("ACTIVE")).thenReturn(List.of(activeSignal));
+        when(marketSnapshotRepository.findLatestBefore(any(LocalDateTime.class)))
+                .thenReturn(Optional.of(new MarketSnapshot()));
+        // Live LTP unavailable (sentinel) ...
+        when(optionPricingService.getOptionLtp("BUY_CE", 23500)).thenReturn(-1.0);
+        // ... so the theoretical premium (185, above Target2 180) drives resolution.
+        when(optionPremiumService.latestPremiums()).thenReturn(
+                new com.nifty.analysis.dto.OptionPremiumDto.Response(23500.0, "2026-06-25", 2,
+                        List.of(new com.nifty.analysis.dto.OptionPremiumDto.StrikePremium(23500, 12.5, 185.0, 5.0))));
+
+        MarketSnapshot latestSnap = new MarketSnapshot();
+        latestSnap.setSnapshotTime(LocalDateTime.now());
+        latestSnap.setNiftySpot(23560.0);
+
+        marketCollectorService.updateActiveTrades(latestSnap);
+
+        assertEquals("COMPLETED", activeSignal.getStatus());
+        verify(tradeResultRepository, times(1)).save(any(TradeResult.class));
+    }
+
+    @Test
+    void testUpdateActiveTrades_StaysActiveWhenNoPriceAvailable() {
+        // Neither a live nor a theoretical price → must NOT resolve on a fabricated price.
+        TradeSignal activeSignal = new TradeSignal();
+        activeSignal.setId(12L);
+        activeSignal.setSignalTime(LocalDateTime.now().minusMinutes(5));
+        activeSignal.setSignalType("BUY_CE");
+        activeSignal.setStrike(23500);
+        activeSignal.setEntry(150.0);
+        activeSignal.setStopLoss(135.0);
+        activeSignal.setTarget1(165.0);
+        activeSignal.setTarget2(180.0);
+        activeSignal.setStatus("ACTIVE");
+
+        when(tradeSignalRepository.findByStatus("ACTIVE")).thenReturn(List.of(activeSignal));
+        when(marketSnapshotRepository.findLatestBefore(any(LocalDateTime.class)))
+                .thenReturn(Optional.of(new MarketSnapshot()));
+        when(optionPricingService.getOptionLtp("BUY_CE", 23500)).thenReturn(-1.0);
+        // latestPremiums returns the empty default (no strike) → no theoretical price.
+
+        MarketSnapshot latestSnap = new MarketSnapshot();
+        latestSnap.setSnapshotTime(LocalDateTime.now());
+        latestSnap.setNiftySpot(23560.0);
+
+        marketCollectorService.updateActiveTrades(latestSnap);
+
+        assertEquals("ACTIVE", activeSignal.getStatus()); // unresolved, left for next cycle
+        verify(tradeResultRepository, never()).save(any(TradeResult.class));
     }
 
     @Test

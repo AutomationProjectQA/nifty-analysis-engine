@@ -68,10 +68,15 @@ public class OrderExecutionService {
             return;
         }
 
-        // Fetch LTP to use as entry price
+        // Fetch LTP to use as entry price. A real order must never be placed at a
+        // fabricated price — if the live premium is unavailable, abort the order.
         double entryPremium = angelOneDataClient.fetchLtp(scrip.exchSeg(), scrip.token());
         if (entryPremium <= 0) {
-            entryPremium = 150.0; // Fallback
+            log.error("Live LTP unavailable for {} (token {}). Aborting order — refusing to trade at a fabricated price.",
+                    symbol, scrip.token());
+            telegramBotService.sendMessage(String.format(
+                    "⚠️ *ORDER ABORTED*\nNo live premium for `%s` (feed down / simulated session). No order placed.", symbol));
+            return;
         }
 
         // Fetch available wallet balance

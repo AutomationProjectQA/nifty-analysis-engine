@@ -42,7 +42,7 @@ public class TestAngelOne {
 
         // 2. Instantiate client and set fields via reflection
         WebClient.Builder webClientBuilder = WebClient.builder();
-        AngelOneDataClient client = new AngelOneDataClient(webClientBuilder);
+        AngelOneDataClient client = new AngelOneDataClient(webClientBuilder, new com.nifty.analysis.service.DataFeedStatus());
         
         setField(client, "apiKey", apiKey);
         setField(client, "clientCode", clientCode);

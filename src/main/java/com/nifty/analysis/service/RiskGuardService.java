@@ -38,8 +38,19 @@ public class RiskGuardService {
     @Value("${nifty.risk.max-loss-per-day:1000.0}")
     private double maxLossPerDay;
 
+    // Data provider in use. The simulated-data block only applies to the live "angelone"
+    // provider; pure "simulated" mode is an intentional demo and is never blocked.
+    @Value("${nifty.collector.provider:angelone}")
+    private String provider;
+
+    // Refuse to open new trades when the live feed has degraded to simulated data.
+    // Kill-switch: set false to disable this guard entirely.
+    @Value("${nifty.risk.block-on-simulated-data:true}")
+    private boolean blockOnSimulatedData;
+
     private final TradeSignalRepository tradeSignalRepository;
     private final TradeResultRepository tradeResultRepository;
+    private final DataFeedStatus dataFeedStatus;
 
     /**
      * Checks whether a new trade may be opened right now under the configured
@@ -48,6 +59,14 @@ public class RiskGuardService {
     public RiskCheck canOpenNewTrade() {
         if (!tradingEnabled) {
             return RiskCheck.deny("Trading is disabled (kill switch nifty.risk.trading-enabled=false).");
+        }
+
+        // Never trade on simulated/degraded data in live (angelone) mode. This only
+        // blocks when the feed has actually fallen back to simulation — when live data
+        // is flowing, dataFeedStatus.isLive() is true and trading proceeds normally.
+        if (blockOnSimulatedData && "angelone".equalsIgnoreCase(provider) && !dataFeedStatus.isLive()) {
+            return RiskCheck.deny("Market data is simulated/degraded (live broker feed unavailable). "
+                    + "Refusing to open new trades on fabricated prices.");
         }
 
         LocalDateTime startOfDay = ZonedDateTime.now(ZoneId.of("Asia/Kolkata"))

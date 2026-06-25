@@ -45,7 +45,8 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
     private String totpKey;
 
     private final WebClient.Builder webClientBuilder;
-    
+    private final com.nifty.analysis.service.DataFeedStatus dataFeedStatus;
+
     private String jwtToken;
     private String feedToken; // required by the streaming WebSocket (SmartWebSocketV2)
     private final Map<String, ScripInfo> scripMap = new ConcurrentHashMap<>();
@@ -260,6 +261,7 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
                     }
                 }
 
+                dataFeedStatus.update(true); // real live market data
                 return new MarketSnapshotDto(spot, futures, vix, volume, LocalDateTime.now());
             }
         } catch (Exception e) {
@@ -463,6 +465,7 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
     }
 
     private MarketSnapshotDto getSimulatedFallbackMarketData() {
+        dataFeedStatus.update(false); // degraded — every caller of this is on simulated data
         double spot = 23500.0 + (new Random().nextDouble() - 0.5) * 10.0;
         return new MarketSnapshotDto(spot, spot + 30.0, 13.5, 500000.0, LocalDateTime.now());
     }
@@ -596,7 +599,7 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
     public double fetchLtp(String exchange, String token) {
         ensureAuthenticated();
         if ("SIMULATED_JWT_TOKEN".equals(jwtToken)) {
-            return 150.0;
+            return -1.0; // sentinel: no live price (simulated/degraded session) — callers must NOT fabricate one
         }
         try {
             Map<String, Object> request = new HashMap<>();
@@ -631,6 +634,6 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
         } catch (Exception e) {
             log.error("Failed to fetch LTP for exchange: {}, token: {}", exchange, token, e);
         }
-        return 150.0;
+        return -1.0; // sentinel: live LTP unavailable — callers must NOT fabricate a price
     }
 }
