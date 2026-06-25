@@ -9,6 +9,7 @@ import NewspaperIcon from '@mui/icons-material/Newspaper';
 import CalculateIcon from '@mui/icons-material/Calculate';
 import SchoolIcon from '@mui/icons-material/School';
 import AssessmentIcon from '@mui/icons-material/Assessment';
+import AutoGraphIcon from '@mui/icons-material/Insights';
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
 import MenuIcon from '@mui/icons-material/Menu';
 
@@ -19,6 +20,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import AdSenseSlot from './components/AdSenseSlot';
 import Dashboard from './pages/Dashboard';
 import OptionChain from './pages/OptionChain';
+import StrategyBuilder from './pages/StrategyBuilder';
 import AiSignals from './pages/AiSignals';
 import Performance from './pages/Performance';
 import MarketReports from './pages/MarketReports';
@@ -31,6 +33,7 @@ const drawerWidth = 240;
 const menuItems = [
   { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
   { text: 'Option Chain', icon: <BarChartIcon />, path: '/option-chain' },
+  { text: 'Strategy Builder', icon: <AutoGraphIcon />, path: '/strategy' },
   { text: 'AI Signals', icon: <BoltIcon />, path: '/signals' },
   { text: 'Performance', icon: <AssessmentIcon />, path: '/performance' },
   { text: 'Market Reports', icon: <DescriptionIcon />, path: '/reports' },
@@ -61,11 +64,12 @@ function NavigationLayout({ children }) {
                 to={item.path}
                 onClick={() => setMobileOpen(false)}
                 sx={{
-                  borderRadius: 2,
-                  bgcolor: active ? 'rgba(38, 166, 154, 0.1)' : 'transparent',
+                  borderRadius: 2.5,
+                  py: 1,
+                  bgcolor: active ? 'primary.light' : 'transparent',
                   color: active ? 'primary.main' : 'text.secondary',
                   '&:hover': {
-                    bgcolor: active ? 'rgba(38, 166, 154, 0.15)' : 'rgba(255, 255, 255, 0.03)',
+                    bgcolor: active ? 'primary.light' : 'action.hover',
                     color: active ? 'primary.main' : 'text.primary',
                   },
                 }}
@@ -91,9 +95,9 @@ function NavigationLayout({ children }) {
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: 'background.default' }}>
       <CssBaseline />
-      
+
       {/* Top Navbar */}
-      <AppBar position="fixed" sx={{ zIndex: (theme) => theme.zIndex.drawer + 1, bgcolor: '#131722', borderBottom: '1px solid #1e222d', boxShadow: 'none' }}>
+      <AppBar position="fixed" sx={{ zIndex: (theme) => theme.zIndex.drawer + 1, bgcolor: '#ffffff', borderBottom: '1px solid', borderColor: 'divider', boxShadow: 'none', color: 'text.primary' }}>
         <Toolbar sx={{ justifyContent: 'space-between' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <IconButton
@@ -101,32 +105,35 @@ function NavigationLayout({ children }) {
               aria-label="open drawer"
               edge="start"
               onClick={handleDrawerToggle}
-              sx={{ mr: 2, display: { md: 'none' } }}
+              sx={{ mr: 1, display: { md: 'none' } }}
             >
               <MenuIcon />
             </IconButton>
-            <Typography variant="h6" noWrap component="div" sx={{ fontFamily: 'Outfit, sans-serif', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Box component="span" sx={{ color: 'primary.main', display: 'flex', alignItems: 'center' }}>
-                <BoltIcon sx={{ fontSize: 28 }} />
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
+              <Box sx={{ width: 34, height: 34, borderRadius: 2, bgcolor: 'primary.main', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <BoltIcon sx={{ fontSize: 22, color: '#fff' }} />
               </Box>
-              Nifty Intelligence Portal
-            </Typography>
+              <Typography variant="h6" noWrap component="div" sx={{ fontFamily: 'Outfit, sans-serif', fontWeight: 800, letterSpacing: '-0.01em' }}>
+                Nifty Intelligence
+              </Typography>
+            </Box>
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             {(() => {
-              const color = online === false ? '#ef5350' : '#26a69a';
+              const offline = online === false;
               const label = online === null
                 ? 'Connecting…'
                 : online
-                  ? (streaming ? 'Live • Streaming' : 'Live Connection')
+                  ? (streaming ? 'Live • Streaming' : 'Live')
                   : 'Offline — demo data';
-              const rgb = online === false ? '239, 83, 80' : '38, 166, 154';
+              const rgb = offline ? '224, 72, 61' : '0, 179, 134';
+              const color = offline ? '#e0483d' : '#00b386';
               return (
                 <Chip
                   icon={<FiberManualRecordIcon sx={{ fontSize: '10px !important', color: `${color} !important` }} />}
                   label={label}
                   size="small"
-                  sx={{ bgcolor: `rgba(${rgb}, 0.1)`, border: `1px solid rgba(${rgb}, 0.2)`, color, fontWeight: 600 }}
+                  sx={{ bgcolor: `rgba(${rgb}, 0.1)`, border: `1px solid rgba(${rgb}, 0.25)`, color, fontWeight: 700 }}
                 />
               );
             })()}
@@ -144,7 +151,7 @@ function NavigationLayout({ children }) {
         }}
         sx={{
           display: { xs: 'block', md: 'none' },
-          [`& .MuiDrawer-paper`]: { width: drawerWidth, boxSizing: 'border-box', bgcolor: '#131722', borderRight: '1px solid #1e222d' },
+          [`& .MuiDrawer-paper`]: { width: drawerWidth, boxSizing: 'border-box', bgcolor: '#ffffff', borderRight: '1px solid', borderColor: 'divider' },
         }}
       >
         <Toolbar />
@@ -158,7 +165,7 @@ function NavigationLayout({ children }) {
           display: { xs: 'none', md: 'block' },
           width: drawerWidth,
           flexShrink: 0,
-          [`& .MuiDrawer-paper`]: { width: drawerWidth, boxSizing: 'border-box', bgcolor: '#131722', borderRight: '1px solid #1e222d' },
+          [`& .MuiDrawer-paper`]: { width: drawerWidth, boxSizing: 'border-box', bgcolor: '#ffffff', borderRight: '1px solid', borderColor: 'divider' },
         }}
       >
         <Toolbar />
@@ -183,6 +190,7 @@ function App() {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/option-chain" element={<OptionChain />} />
+            <Route path="/strategy" element={<StrategyBuilder />} />
             <Route path="/signals" element={<AiSignals />} />
             <Route path="/performance" element={<Performance />} />
             <Route path="/reports" element={<MarketReports />} />

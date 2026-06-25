@@ -27,6 +27,7 @@ public class MarketController {
     private final RedisService redisService;
     private final MarketSnapshotRepository marketSnapshotRepository;
     private final OptionSnapshotRepository optionSnapshotRepository;
+    private final com.nifty.analysis.service.OptionPremiumService optionPremiumService;
 
     @PostMapping("/market/collect")
     public ResponseEntity<String> forceCollect() {
@@ -41,6 +42,15 @@ public class MarketController {
                 .or(marketSnapshotRepository::findLatest)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    @GetMapping("/options/premiums")
+    public ResponseEntity<com.nifty.analysis.dto.OptionPremiumDto.Response> getOptionPremiums() {
+        com.nifty.analysis.dto.OptionPremiumDto.Response resp = optionPremiumService.latestPremiums();
+        if (resp.premiums().isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(resp);
     }
 
     @GetMapping("/options/latest")

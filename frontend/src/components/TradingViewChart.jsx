@@ -53,7 +53,7 @@ const TradingViewChart = ({ symbol = 'NSE:NIFTY', interval = '5', height = 420 }
       symbol,
       interval,
       timezone: 'Asia/Kolkata',
-      theme: 'dark',
+      theme: 'light',
       style: '1',
       locale: 'en',
       enable_publishing: false,

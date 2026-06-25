@@ -30,11 +30,11 @@ const AdSenseSlot = ({ adSlot, adFormat = 'auto', responsive = 'true', style = {
         sx={{
           margin: '20px 0',
           padding: '20px',
-          border: '1px dashed #1e222d',
-          backgroundColor: '#171b26',
+          border: '1px dashed #e9eaf2',
+          backgroundColor: '#f7f8fc',
           borderRadius: '8px',
           textAlign: 'center',
-          color: '#b2b5be',
+          color: '#6b7185',
           minHeight: '90px',
           display: 'flex',
           flexDirection: 'column',
@@ -43,7 +43,7 @@ const AdSenseSlot = ({ adSlot, adFormat = 'auto', responsive = 'true', style = {
           cursor: 'pointer',
           '&:hover': {
             borderColor: '#26a69a',
-            backgroundColor: '#1e222d',
+            backgroundColor: '#e9eaf2',
           }
         }}
         onClick={() => window.open('https://google.com/adsense/start', '_blank')}

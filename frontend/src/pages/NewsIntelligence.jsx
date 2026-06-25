@@ -106,7 +106,7 @@ const NewsIntelligence = () => {
                       color: 'text.secondary',
                       '& ol': { pl: 0, listStyle: 'none' },
                       '& li': { mb: 3, pl: 0, position: 'relative', lineHeight: 1.7, fontSize: '0.95rem' },
-                      '& strong': { color: '#ffffff', fontWeight: 600 }
+                      '& strong': { color: 'text.primary', fontWeight: 600 }
                     }}>
                       <ReactMarkdown>{news.summary}</ReactMarkdown>
                     </Box>

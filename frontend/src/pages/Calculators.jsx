@@ -78,7 +78,7 @@ const Calculators = () => {
         indicatorColor="primary"
         variant="scrollable"
         scrollButtons="auto"
-        sx={{ mb: 4, borderBottom: '1px solid #1e222d' }}
+        sx={{ mb: 4, borderBottom: '1px solid #e9eaf2' }}
       >
         <Tab label="Option Profit" sx={{ fontWeight: 600 }} />
         <Tab label="Position Size" sx={{ fontWeight: 600 }} />
@@ -116,7 +116,7 @@ const Calculators = () => {
                 </Box>
               </Grid>
 
-              <Grid size={{ xs: 12, md: 6 }} sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', bgcolor: '#171b26', p: 3, borderRadius: 2, border: '1px solid #1e222d' }}>
+              <Grid size={{ xs: 12, md: 6 }} sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', bgcolor: '#f7f8fc', p: 3, borderRadius: 2, border: '1px solid #e9eaf2' }}>
                 <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600, textAlign: 'center' }}>ESTIMATED NET PNL</Typography>
                 <Typography variant="h3" sx={{ fontWeight: 700, textAlign: 'center', mt: 1, mb: 1, fontFamily: 'Outfit, sans-serif', color: optProfitValue >= 0 ? '#26a69a' : '#ef5350' }}>
                   {optProfitValue >= 0 ? '+' : ''}{optProfitValue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
@@ -162,7 +162,7 @@ const Calculators = () => {
                 </Box>
               </Grid>
 
-              <Grid size={{ xs: 12, md: 6 }} sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', bgcolor: '#171b26', p: 3, borderRadius: 2, border: '1px solid #1e222d' }}>
+              <Grid size={{ xs: 12, md: 6 }} sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', bgcolor: '#f7f8fc', p: 3, borderRadius: 2, border: '1px solid #e9eaf2' }}>
                 <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600, mb: 1 }}>MAX RISK BUDGET</Typography>
                 <Typography variant="h5" sx={{ fontWeight: 700, mb: 3, color: '#ef5350', fontFamily: 'Outfit, sans-serif' }}>
                   ₹{maxRiskCash.toLocaleString('en-IN')}
@@ -202,7 +202,7 @@ const Calculators = () => {
                 </Box>
               </Grid>
 
-              <Grid size={{ xs: 12, md: 6 }} sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', bgcolor: '#171b26', p: 3, borderRadius: 2, border: '1px solid #1e222d' }}>
+              <Grid size={{ xs: 12, md: 6 }} sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', bgcolor: '#f7f8fc', p: 3, borderRadius: 2, border: '1px solid #e9eaf2' }}>
                 <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600, mb: 1 }}>RISK REWARD RATIO</Typography>
                 <Typography variant="h4" sx={{ fontWeight: 700, mb: 3, color: '#ffb300', fontFamily: 'Outfit, sans-serif' }}>
                   1 : {rrRatio}
@@ -243,7 +243,7 @@ const Calculators = () => {
                 </Box>
               </Grid>
 
-              <Grid size={{ xs: 12, md: 6 }} sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', bgcolor: '#171b26', p: 3, borderRadius: 2, border: '1px solid #1e222d' }}>
+              <Grid size={{ xs: 12, md: 6 }} sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', bgcolor: '#f7f8fc', p: 3, borderRadius: 2, border: '1px solid #e9eaf2' }}>
                 <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>ESTIMATED PORTFOLIO VALUE</Typography>
                 <Typography variant="h3" sx={{ fontWeight: 700, mt: 1, mb: 3, color: 'primary.main', fontFamily: 'Outfit, sans-serif' }}>
                   ₹{Math.round(sipValue).toLocaleString('en-IN')}
@@ -273,12 +273,12 @@ const Calculators = () => {
                   <Slider value={orderCount} min={2} max={100} step={2} onChange={(e, val) => setOrderCount(val)} />
                 </Box>
                 
-                <Alert severity="info" sx={{ bgcolor: '#171b26', border: '1px solid #1e222d', color: '#b2b5be' }}>
+                <Alert severity="info" sx={{ bgcolor: '#f7f8fc', border: '1px solid #e9eaf2', color: '#6b7185' }}>
                   Calculated based on flat ₹20 brokerage charge per executed options order, which is standard across top discount brokers in India (Zerodha, Angel One, Groww).
                 </Alert>
               </Grid>
 
-              <Grid size={{ xs: 12, md: 6 }} sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', bgcolor: '#171b26', p: 3, borderRadius: 2, border: '1px solid #1e222d' }}>
+              <Grid size={{ xs: 12, md: 6 }} sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', bgcolor: '#f7f8fc', p: 3, borderRadius: 2, border: '1px solid #e9eaf2' }}>
                 <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>TOTAL TRANSACTION CHARGES</Typography>
                 <Typography variant="h3" sx={{ fontWeight: 700, mt: 1, mb: 3, color: '#ef5350', fontFamily: 'Outfit, sans-serif' }}>
                   ₹{totalTransactionCost.toFixed(2)}

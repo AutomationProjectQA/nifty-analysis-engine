@@ -167,13 +167,13 @@ const OptionChain = () => {
           <Box sx={{ width: '100%', height: 300 }}>
             <ResponsiveContainer>
               <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e222d" />
-                <XAxis dataKey="name" stroke="#b2b5be" />
-                <YAxis stroke="#b2b5be" />
-                <Tooltip contentStyle={{ backgroundColor: '#131722', borderColor: '#1e222d', color: '#ffffff' }} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#e9eaf2" />
+                <XAxis dataKey="name" stroke="#6b7185" />
+                <YAxis stroke="#6b7185" />
+                <Tooltip contentStyle={{ backgroundColor: '#ffffff', borderColor: '#e9eaf2', borderRadius: 10, color: '#1b1d28', boxShadow: '0 4px 12px rgba(16,24,40,0.08)' }} />
                 <Legend />
-                <Bar dataKey="CallOI" fill="#ef5350" name="Calls (CE OI)" />
-                <Bar dataKey="PutOI" fill="#26a69a" name="Puts (PE OI)" />
+                <Bar dataKey="CallOI" fill="#e0483d" name="Calls (CE OI)" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="PutOI" fill="#00b386" name="Puts (PE OI)" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </Box>
@@ -186,25 +186,25 @@ const OptionChain = () => {
           <TableHead>
             <TableRow>
               {/* Calls Side */}
-              <TableCell align="center" colSpan={4} sx={{ bgcolor: 'rgba(239, 83, 80, 0.05)', color: '#ef5350', borderRight: '2px solid #1e222d', fontWeight: 700 }}>CALLS (CE)</TableCell>
+              <TableCell align="center" colSpan={4} sx={{ bgcolor: 'rgba(239, 83, 80, 0.05)', color: '#ef5350', borderRight: '2px solid #e9eaf2', fontWeight: 700 }}>CALLS (CE)</TableCell>
               {/* Strike Column */}
-              <TableCell align="center" sx={{ bgcolor: '#171b26', fontWeight: 700 }}>STRIKE</TableCell>
+              <TableCell align="center" sx={{ bgcolor: '#f7f8fc', fontWeight: 700 }}>STRIKE</TableCell>
               {/* Puts Side */}
-              <TableCell align="center" colSpan={4} sx={{ bgcolor: 'rgba(38, 166, 154, 0.05)', color: '#26a69a', borderLeft: '2px solid #1e222d', fontWeight: 700 }}>PUTS (PE)</TableCell>
+              <TableCell align="center" colSpan={4} sx={{ bgcolor: 'rgba(38, 166, 154, 0.05)', color: '#26a69a', borderLeft: '2px solid #e9eaf2', fontWeight: 700 }}>PUTS (PE)</TableCell>
             </TableRow>
             <TableRow>
               {/* Call Headers */}
-              <TableCell align="right" sx={{ bgcolor: '#171b26' }}>Volume</TableCell>
-              <TableCell align="right" sx={{ bgcolor: '#171b26' }}>IV</TableCell>
-              <TableCell align="right" sx={{ bgcolor: '#171b26' }}>OI Chg</TableCell>
-              <TableCell align="right" sx={{ bgcolor: '#171b26', borderRight: '2px solid #1e222d' }}>OI (Lakh)</TableCell>
+              <TableCell align="right" sx={{ bgcolor: '#f7f8fc' }}>Volume</TableCell>
+              <TableCell align="right" sx={{ bgcolor: '#f7f8fc' }}>IV</TableCell>
+              <TableCell align="right" sx={{ bgcolor: '#f7f8fc' }}>OI Chg</TableCell>
+              <TableCell align="right" sx={{ bgcolor: '#f7f8fc', borderRight: '2px solid #e9eaf2' }}>OI (Lakh)</TableCell>
               {/* Strike Header */}
-              <TableCell align="center" sx={{ bgcolor: '#1b2030', fontWeight: 600 }}>Strike Price</TableCell>
+              <TableCell align="center" sx={{ bgcolor: '#eef0f6', fontWeight: 600 }}>Strike Price</TableCell>
               {/* Put Headers */}
-              <TableCell align="left" sx={{ bgcolor: '#171b26', borderLeft: '2px solid #1e222d' }}>OI (Lakh)</TableCell>
-              <TableCell align="left" sx={{ bgcolor: '#171b26' }}>OI Chg</TableCell>
-              <TableCell align="left" sx={{ bgcolor: '#171b26' }}>IV</TableCell>
-              <TableCell align="left" sx={{ bgcolor: '#171b26' }}>Volume</TableCell>
+              <TableCell align="left" sx={{ bgcolor: '#f7f8fc', borderLeft: '2px solid #e9eaf2' }}>OI (Lakh)</TableCell>
+              <TableCell align="left" sx={{ bgcolor: '#f7f8fc' }}>OI Chg</TableCell>
+              <TableCell align="left" sx={{ bgcolor: '#f7f8fc' }}>IV</TableCell>
+              <TableCell align="left" sx={{ bgcolor: '#f7f8fc' }}>Volume</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -236,12 +236,12 @@ const OptionChain = () => {
                     />
                   </TableCell>
                   {/* CE OI */}
-                  <TableCell align="right" sx={{ borderRight: '2px solid #1e222d', fontWeight: 600 }}>
+                  <TableCell align="right" sx={{ borderRight: '2px solid #e9eaf2', fontWeight: 600 }}>
                     {Math.round(row.ceOi / 100000).toLocaleString('en-IN')} L
                   </TableCell>
 
                   {/* STRIKE PRICE */}
-                  <TableCell align="center" sx={{ bgcolor: isAtm ? 'rgba(38, 166, 154, 0.18)' : '#171b26', fontWeight: 700, borderLeft: '1px solid', borderRight: '1px solid', borderColor: 'divider' }}>
+                  <TableCell align="center" sx={{ bgcolor: isAtm ? 'rgba(38, 166, 154, 0.18)' : '#f7f8fc', fontWeight: 700, borderLeft: '1px solid', borderRight: '1px solid', borderColor: 'divider' }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.75 }}>
                       {row.strikePrice}
                       {isAtm && (
@@ -252,7 +252,7 @@ const OptionChain = () => {
                   </TableCell>
 
                   {/* PE OI */}
-                  <TableCell align="left" sx={{ borderLeft: '2px solid #1e222d', fontWeight: 600 }}>
+                  <TableCell align="left" sx={{ borderLeft: '2px solid #e9eaf2', fontWeight: 600 }}>
                     {Math.round(row.peOi / 100000).toLocaleString('en-IN')} L
                   </TableCell>
                   {/* PE OI Chg */}
