@@ -3,6 +3,7 @@ package com.nifty.analysis.agent;
 import com.nifty.analysis.dto.AgentResponse;
 import com.nifty.analysis.engine.ConfidenceEngine;
 import com.nifty.analysis.entity.MarketSnapshot;
+import com.nifty.analysis.entity.OptionSnapshot;
 import com.nifty.analysis.entity.SignalExplanation;
 import com.nifty.analysis.entity.TradeSignal;
 import com.nifty.analysis.notification.TelegramBotService;
@@ -46,6 +47,9 @@ class DecisionAgentTest {
     @Mock private TechnicalAgent technicalAgent;
     @Mock private OptionsAgent optionsAgent;
     @Mock private SentimentAgent sentimentAgent;
+    @Mock private MarketAgent marketAgent;
+    @Mock private LiquidityAgent liquidityAgent;
+    @Mock private EntryTimingAgent entryTimingAgent;
     @Mock private MarketRegimeAgent marketRegimeAgent;
     @Mock private MarketSnapshotRepository marketSnapshotRepository;
     @Mock private TradeSignalRepository tradeSignalRepository;
@@ -71,6 +75,14 @@ class DecisionAgentTest {
         ReflectionTestUtils.setField(decisionAgent, "modelMinHistory", 50L);
         ReflectionTestUtils.setField(decisionAgent, "targetProfitPercent", 2.0);
         ReflectionTestUtils.setField(decisionAgent, "stopLossPercent", 40.0);
+        // Signal-generation tuning fields: keep single-strike + extra gates deterministic.
+        ReflectionTestUtils.setField(decisionAgent, "strikeLadderEnabled", false);
+        ReflectionTestUtils.setField(decisionAgent, "strikeStep", 50);
+        ReflectionTestUtils.setField(decisionAgent, "sidewaysExtraGate", 8.0);
+        ReflectionTestUtils.setField(decisionAgent, "minLiquidityScore", 70.0);
+        ReflectionTestUtils.setField(decisionAgent, "momentumConfirmationEnabled", false);
+        ReflectionTestUtils.setField(decisionAgent, "entryTimingEnabled", false);
+        ReflectionTestUtils.setField(decisionAgent, "sessionFilterEnabled", false);
 
         // Risk guard allows trading by default; one test overrides this.
         lenient().when(riskGuardService.canOpenNewTrade())
@@ -78,6 +90,9 @@ class DecisionAgentTest {
         // Pricing stubs used only by the signal-generating tests.
         lenient().when(optionPricingService.getOptionLtp(anyString(), anyInt())).thenReturn(150.0);
         lenient().when(orderExecutionService.calculateQuantity(anyDouble())).thenReturn(65);
+        // Strikes are liquid by default; the per-strike liquidity gate passes.
+        lenient().when(liquidityAgent.evaluateStrike(any(), anyBoolean()))
+                .thenReturn(new AgentResponse(100.0, "BULLISH", List.of()));
 
         latest = new MarketSnapshot();
         latest.setSnapshotTime(now);
@@ -86,13 +101,23 @@ class DecisionAgentTest {
         latest.setIndiaVix(12.0);
     }
 
+    /** A single-strike (ATM 23500) option chain so the per-strike liquidity lookup resolves. */
+    private List<OptionSnapshot> atmChain() {
+        OptionSnapshot o = new OptionSnapshot();
+        o.setStrikePrice(23500);
+        o.setCeOi(1_000_000L);
+        o.setPeOi(1_000_000L);
+        return List.of(o);
+    }
+
     /** Stubs the path up to (but not including) the confidence computation, for a BULLISH setup. */
     private void stubUpToConfidence() {
         when(optionSnapshotRepository.findLatestSnapshotTime()).thenReturn(now);
-        when(optionSnapshotRepository.findBySnapshotTime(now)).thenReturn(List.of());
+        when(optionSnapshotRepository.findBySnapshotTime(now)).thenReturn(atmChain());
         when(marketRegimeAgent.analyze(now)).thenReturn(new AgentResponse(85.0, "TRENDING_BULLISH", List.of()));
         when(technicalAgent.analyze(latest)).thenReturn(new AgentResponse(80.0, "BULLISH", List.of()));
-        when(tradeSignalRepository.findFirstByStrikeAndSignalTypeAndStatus(23500, "BUY_CE", "ACTIVE"))
+        // Reached only when a signal is actually emitted (per-strike duplicate guard).
+        lenient().when(tradeSignalRepository.findFirstByStrikeAndSignalTypeAndStatus(23500, "BUY_CE", "ACTIVE"))
                 .thenReturn(Optional.empty());
         when(technicalAgent.getFeatures(latest))
                 .thenReturn(new TechnicalAgent.TechnicalFeatures(50, 1.0, 1.0, 12, 0.0, 0.01, 0.0, 1.0));
@@ -134,14 +159,20 @@ class DecisionAgentTest {
     }
 
     @Test
-    void sidewaysRegime_skipsEvaluation() {
-        when(optionSnapshotRepository.findLatestSnapshotTime()).thenReturn(now);
-        when(optionSnapshotRepository.findBySnapshotTime(now)).thenReturn(List.of());
+    void sidewaysRegime_raisesGateInsteadOfSkipping() {
+        // Sideways no longer hard-skips: it proceeds but demands gating + sidewaysExtraGate (60 + 8 = 68).
+        stubUpToConfidence();
         when(marketRegimeAgent.analyze(now)).thenReturn(new AgentResponse(50.0, "SIDEWAYS", List.of()));
+        when(onnxModelService.isModelLoaded()).thenReturn(false);
+        when(marketSnapshotRepository.count()).thenReturn(100L);
+        stubAgentConfidence(63.0);
+        stubCritic(63.0); // clears the base 60 gate but NOT the stricter 68 sideways gate
 
         decisionAgent.evaluateMarketForSignals(latest, 23490.0);
 
-        verify(technicalAgent, never()).analyze(any());
+        // Evaluation is no longer skipped (direction was computed)...
+        verify(technicalAgent).analyze(latest);
+        // ...but the stricter sideways gate blocks the trade.
         verify(tradeSignalRepository, never()).save(any());
     }
 

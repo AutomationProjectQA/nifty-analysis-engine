@@ -1,8 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Card, CardContent, Typography, Tabs, Tab, Button, Pagination, CircularProgress, Chip, Alert } from '@mui/material';
+import { Box, Card, CardContent, Typography, Tabs, Tab, Button, CircularProgress, Chip, Alert } from '@mui/material';
 import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ReactMarkdown from 'react-markdown';
 import api from '../api/client';
+
+// "2026-06-25" / ISO -> "25 Jun 2026"; falls back to the raw string if unparseable.
+const fmtDate = (d) => {
+  if (!d) return '—';
+  const parsed = new Date(d);
+  return isNaN(parsed) ? d : parsed.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+};
 
 // Mock report text if backend is down
 const mockPreMarket = `### 🌅 Nifty Pre-Market View: Bullish Expansion Expected
@@ -54,13 +63,18 @@ const MarketReports = () => {
   };
 
   const [generating, setGenerating] = useState(false);
+  const [genMsg, setGenMsg] = useState(null); // { severity, text } feedback after a generate
+
   const generateReport = async () => {
     setGenerating(true);
+    setGenMsg(null);
     try {
       await api.post(`/api/v1/reports/generate?type=${reportType}`, null, { timeout: 60000 });
       await fetchLatestReport(reportType);
+      setGenMsg({ severity: 'success', text: 'Fresh report generated.' });
     } catch (e) {
       console.warn('Report generation failed.', e.message);
+      setGenMsg({ severity: 'error', text: 'Report generation failed. Check the backend logs and try again.' });
     } finally {
       setGenerating(false);
     }
@@ -80,10 +94,21 @@ const MarketReports = () => {
           <Chip label="Demo data — backend unreachable" size="small"
             sx={{ bgcolor: 'rgba(255,179,0,0.12)', color: '#ffb300', border: '1px solid rgba(255,179,0,0.3)', fontWeight: 600 }} />
         )}
-        <Button variant="outlined" size="small" onClick={generateReport} disabled={generating} sx={{ ml: 'auto' }}>
-          {generating ? <CircularProgress size={18} color="inherit" /> : 'Generate now'}
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1, ml: 'auto' }}>
+          <Button variant="text" size="small" startIcon={<RefreshIcon />} onClick={() => fetchLatestReport(reportType)} disabled={loading || generating}>
+            Refresh
+          </Button>
+          <Button variant="outlined" size="small" startIcon={!generating && <AutoAwesomeIcon />} onClick={generateReport} disabled={generating}>
+            {generating ? <CircularProgress size={18} color="inherit" /> : 'Generate now'}
+          </Button>
+        </Box>
       </Box>
+
+      {genMsg && (
+        <Alert severity={genMsg.severity} sx={{ mb: 3 }} onClose={() => setGenMsg(null)}>
+          {genMsg.text}
+        </Alert>
+      )}
 
       {/* Tabs */}
       <Tabs 
@@ -91,7 +116,7 @@ const MarketReports = () => {
         onChange={(e, val) => setReportType(val)}
         textColor="primary"
         indicatorColor="primary"
-        sx={{ mb: 4, borderBottom: '1px solid #1e222d' }}
+        sx={{ mb: 4, borderBottom: '1px solid', borderColor: 'divider' }}
       >
         <Tab label="Pre-Market Vlog (07:00 AM)" value="PRE_MARKET" sx={{ fontWeight: 600 }} />
         <Tab label="Post-Market Vlog (03:35 PM)" value="POST_MARKET" sx={{ fontWeight: 600 }} />
@@ -109,19 +134,19 @@ const MarketReports = () => {
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'text.secondary', mb: 3 }}>
               <CalendarTodayIcon fontSize="small" />
               <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                Published Report Date: {latestReport.publishDate}
+                Published: {fmtDate(latestReport.publishDate)}
               </Typography>
             </Box>
 
             {/* Content Render */}
-            <Box className="markdown-report-body" sx={{ 
+            <Box className="markdown-report-body" sx={{
               color: 'text.primary',
               '& h3': { fontFamily: 'Outfit, sans-serif', fontSize: '1.4rem', fontWeight: 700, mb: 2, color: 'primary.main' },
-              '& h4': { fontSize: '1.05rem', fontWeight: 600, mt: 3, mb: 1, color: '#ffffff' },
+              '& h4': { fontSize: '1.05rem', fontWeight: 600, mt: 3, mb: 1, color: 'text.primary' },
               '& ul': { pl: 2, mt: 1, mb: 2 },
               '& li': { mb: 1, lineHeight: 1.6 },
               '& p': { mb: 2, lineHeight: 1.6, color: 'text.secondary' },
-              '& strong': { color: '#ffffff', fontWeight: 600 }
+              '& strong': { color: 'text.primary', fontWeight: 600 }
             }}>
               <ReactMarkdown>{latestReport.reportText}</ReactMarkdown>
             </Box>

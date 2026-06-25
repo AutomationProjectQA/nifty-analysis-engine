@@ -79,12 +79,12 @@ const AiSignals = () => {
 
   const getStatusColor = (status) => {
     switch (status) {
-      case 'ACTIVE': return { bg: 'rgba(38, 166, 154, 0.1)', color: '#26a69a' };
-      case 'TARGET1': return { bg: 'rgba(38, 166, 154, 0.2)', color: '#26a69a', label: 'Target 1 Hit' };
-      case 'TARGET2': return { bg: 'rgba(38, 166, 154, 0.3)', color: '#26a69a', label: 'Target 2 Hit' };
-      case 'STOP_LOSS': return { bg: 'rgba(239, 83, 80, 0.1)', color: '#ef5350', label: 'SL Hit' };
-      case 'EXPIRED': return { bg: 'rgba(255, 179, 0, 0.1)', color: '#ffb300', label: 'Expired' };
-      default: return { bg: '#1e222d', color: '#b2b5be' };
+      case 'ACTIVE': return { bg: 'rgba(38, 166, 154, 0.1)', color: 'primary.main', label: 'Active' };
+      case 'TARGET1': return { bg: 'rgba(38, 166, 154, 0.2)', color: 'primary.main', label: 'Target 1 Hit' };
+      case 'TARGET2': return { bg: 'rgba(38, 166, 154, 0.3)', color: 'primary.main', label: 'Target 2 Hit' };
+      case 'STOP_LOSS': return { bg: 'rgba(239, 83, 80, 0.1)', color: 'secondary.main', label: 'SL Hit' };
+      case 'EXPIRED': return { bg: 'rgba(255, 179, 0, 0.1)', color: 'warning.main', label: 'Expired' };
+      default: return { bg: 'rgba(255,255,255,0.06)', color: 'text.secondary' };
     }
   };
 
@@ -93,6 +93,13 @@ const AiSignals = () => {
     if (activeTab === 'EXPIRED') return s.status !== 'ACTIVE';
     return true;
   });
+
+  // Precompute tab counts once instead of re-filtering inside each button's label.
+  const tabCounts = {
+    ALL: signals.length,
+    ACTIVE: signals.filter(s => s.status === 'ACTIVE').length,
+    EXPIRED: signals.filter(s => s.status !== 'ACTIVE').length,
+  };
 
   return (
     <Box sx={{ flexGrow: 1 }}>
@@ -107,7 +114,7 @@ const AiSignals = () => {
       </Box>
 
       {/* Tabs / Filters */}
-      <Box sx={{ display: 'flex', gap: 2, mb: 4 }}>
+      <Box sx={{ display: 'flex', gap: 2, mb: 4, flexWrap: 'wrap' }}>
         {['ALL', 'ACTIVE', 'EXPIRED'].map((tab) => (
           <Button
             key={tab}
@@ -117,14 +124,14 @@ const AiSignals = () => {
             sx={{
               fontWeight: 600,
               bgcolor: activeTab === tab ? 'primary.main' : 'transparent',
-              borderColor: activeTab === tab ? 'primary.main' : '#1e222d',
+              borderColor: activeTab === tab ? 'primary.main' : 'divider',
               '&:hover': {
                 borderColor: 'primary.main',
                 bgcolor: activeTab === tab ? 'primary.main' : 'rgba(38, 166, 154, 0.05)'
               }
             }}
           >
-            {tab} Signals ({signals.filter(s => tab === 'ALL' || (tab === 'ACTIVE' ? s.status === 'ACTIVE' : s.status !== 'ACTIVE')).length})
+            {tab} Signals ({tabCounts[tab]})
           </Button>
         ))}
       </Box>
@@ -147,17 +154,17 @@ const AiSignals = () => {
 
           return (
             <Grid key={sig.id} size={{ xs: 12, md: 6 }}>
-              <Card sx={{ borderLeft: `5px solid ${isCe ? '#26a69a' : '#ef5350'}` }}>
+              <Card sx={{ borderLeft: 5, borderColor: isCe ? 'primary.main' : 'secondary.main', height: '100%' }}>
                 <CardContent sx={{ pb: '16px !important' }}>
-                  
+
                   {/* Card Header */}
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, gap: 1, flexWrap: 'wrap' }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       <Chip
                         label={sig.signalType}
                         sx={{
                           bgcolor: isCe ? 'rgba(38, 166, 154, 0.15)' : 'rgba(239, 83, 80, 0.15)',
-                          color: isCe ? '#26a69a' : '#ef5350',
+                          color: isCe ? 'primary.main' : 'secondary.main',
                           fontWeight: 700,
                           borderRadius: 1
                         }}
@@ -173,24 +180,24 @@ const AiSignals = () => {
                   </Box>
 
                   {/* Pricing levels grid */}
-                  <Grid container spacing={2} sx={{ mb: 3, bgcolor: '#171b26', p: 2, borderRadius: 2, border: '1px solid #1e222d' }}>
+                  <Grid container spacing={2} sx={{ mb: 3, bgcolor: 'action.hover', p: 2, borderRadius: 2, border: '1px solid', borderColor: 'divider' }}>
                     <Grid size={4} sx={{ textAlign: 'center' }}>
                       <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>ENTRY</Typography>
-                      <Typography variant="h6" sx={{ fontWeight: 700, mt: 0.5, color: '#ffffff' }}>{sig.entry.toFixed(2)}</Typography>
+                      <Typography variant="h6" sx={{ fontWeight: 700, mt: 0.5, color: 'text.primary' }}>{sig.entry.toFixed(2)}</Typography>
                     </Grid>
                     <Grid size={4} sx={{ textAlign: 'center' }}>
                       <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>TARGET 1</Typography>
-                      <Typography variant="h6" sx={{ fontWeight: 700, mt: 0.5, color: '#26a69a' }}>{sig.target1.toFixed(2)}</Typography>
+                      <Typography variant="h6" sx={{ fontWeight: 700, mt: 0.5, color: 'primary.main' }}>{sig.target1.toFixed(2)}</Typography>
                     </Grid>
                     <Grid size={4} sx={{ textAlign: 'center' }}>
                       <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>STOP LOSS</Typography>
-                      <Typography variant="h6" sx={{ fontWeight: 700, mt: 0.5, color: '#ef5350' }}>{sig.stopLoss.toFixed(2)}</Typography>
+                      <Typography variant="h6" sx={{ fontWeight: 700, mt: 0.5, color: 'secondary.main' }}>{sig.stopLoss.toFixed(2)}</Typography>
                     </Grid>
                   </Grid>
 
                   {/* Meter / Time Details */}
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                    
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, gap: 1, flexWrap: 'wrap' }}>
+
                     {/* Time details */}
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, color: 'text.secondary' }}>
                       <AccessTimeIcon fontSize="small" />
@@ -207,7 +214,7 @@ const AiSignals = () => {
                           value={sig.confidence}
                           size={28}
                           thickness={5}
-                          sx={{ color: sig.confidence >= 80 ? '#26a69a' : '#ffb300' }}
+                          sx={{ color: sig.confidence >= 80 ? 'primary.main' : 'warning.main' }}
                         />
                         <Box
                           sx={{
@@ -216,7 +223,7 @@ const AiSignals = () => {
                             alignItems: 'center', justifyContent: 'center',
                           }}
                         >
-                          <BoltIcon sx={{ fontSize: 16, color: sig.confidence >= 80 ? '#26a69a' : '#ffb300' }} />
+                          <BoltIcon sx={{ fontSize: 16, color: sig.confidence >= 80 ? 'primary.main' : 'warning.main' }} />
                         </Box>
                       </Box>
                       <Typography variant="body2" sx={{ fontWeight: 700 }}>
@@ -227,14 +234,14 @@ const AiSignals = () => {
                   </Box>
 
                   {/* Gemini AI Thesis Accordion */}
-                  <Accordion sx={{ bgcolor: 'transparent', boxShadow: 'none', '&:before': { display: 'none' }, border: '1px solid #1e222d', borderRadius: '8px !important' }}>
+                  <Accordion disableGutters sx={{ bgcolor: 'transparent', boxShadow: 'none', '&:before': { display: 'none' }, border: '1px solid', borderColor: 'divider', borderRadius: '8px !important' }}>
                     <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ color: 'primary.main' }} />}>
                       <Typography variant="body2" sx={{ fontWeight: 600, color: 'primary.main', display: 'flex', alignItems: 'center', gap: 0.5 }}>
                         <GavelIcon sx={{ fontSize: 18 }} />
                         AI Analysis Thesis
                       </Typography>
                     </AccordionSummary>
-                    <AccordionDetails sx={{ pt: 0, borderTop: '1px solid #1e222d' }}>
+                    <AccordionDetails sx={{ pt: 0, borderTop: '1px solid', borderColor: 'divider' }}>
                       <Typography variant="body2" sx={{ mt: 1.5, color: 'text.secondary', lineHeight: 1.6 }}>
                         {sig.thesis || "No detailed thesis registered for this trade signal."}
                       </Typography>

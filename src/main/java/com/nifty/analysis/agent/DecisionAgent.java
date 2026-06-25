@@ -53,11 +53,36 @@ public class DecisionAgent {
     @Value("${nifty.risk.stop-loss-percent:40.0}")
     private double stopLossPercent;
 
+    // --- Signal generation tuning (more trades + higher accuracy) ---
+    @Value("${nifty.signal.strike-ladder-enabled:true}")
+    private boolean strikeLadderEnabled;
+
+    @Value("${nifty.signal.strike-step:50}")
+    private int strikeStep;
+
+    @Value("${nifty.signal.sideways-extra-gate:8.0}")
+    private double sidewaysExtraGate;
+
+    @Value("${nifty.signal.min-liquidity-score:70.0}")
+    private double minLiquidityScore;
+
+    @Value("${nifty.signal.momentum-confirmation-enabled:true}")
+    private boolean momentumConfirmationEnabled;
+
+    @Value("${nifty.signal.entry-timing-enabled:true}")
+    private boolean entryTimingEnabled;
+
+    @Value("${nifty.timing.session-filter-enabled:true}")
+    private boolean sessionFilterEnabled;
+
     private final ConfidenceEngine confidenceEngine;
     private final CriticAgent criticAgent;
     private final TechnicalAgent technicalAgent;
     private final OptionsAgent optionsAgent;
     private final SentimentAgent sentimentAgent;
+    private final MarketAgent marketAgent;
+    private final LiquidityAgent liquidityAgent;
+    private final EntryTimingAgent entryTimingAgent;
 
     private final MarketRegimeAgent marketRegimeAgent;
     private final MarketSnapshotRepository marketSnapshotRepository;
@@ -82,20 +107,29 @@ public class DecisionAgent {
             return;
         }
 
+        // 0.5 Time-of-day filter: avoid the volatile first minutes after open and the
+        // theta-heavy final window. Only carves out those intraday windows.
+        if (sessionFilterEnabled && inVolatileWindow()) {
+            log.info("Within a volatile session window (open whipsaw / late-session theta). Skipping trade evaluation.");
+            return;
+        }
+
         // 1. Fetch Option Snapshots to retrieve active option chain
         LocalDateTime latestOptionTime = optionSnapshotRepository.findLatestSnapshotTime();
         if (latestOptionTime == null) {
             log.warn("No option snapshots available. Cannot evaluate trading signals.");
             return;
         }
-        
+
         List<OptionSnapshot> optionChainEntities = optionSnapshotRepository.findBySnapshotTime(latestOptionTime);
-        
-        // 1.5. Gate trades if market regime is sideways to avoid Theta decay
+
+        // 1.5 Market regime: rather than skipping SIDEWAYS markets outright (which kills a
+        // lot of valid scalps), allow them but demand extra confidence via a stricter gate.
+        double effectiveGate = gatingThreshold;
         AgentResponse regimeResponse = marketRegimeAgent.analyze(latest.getSnapshotTime());
         if ("SIDEWAYS".equals(regimeResponse.bias())) {
-            log.info("Market regime is Sideways. Skipping trade evaluation to avoid Theta decay.");
-            return;
+            effectiveGate += sidewaysExtraGate;
+            log.info("Sideways regime detected. Raising gate to {}% (instead of skipping).", effectiveGate);
         }
 
         List<OptionSnapshotDto> optionChainDtos = optionChainEntities.stream().map(o -> new OptionSnapshotDto(
@@ -110,7 +144,7 @@ public class DecisionAgent {
         AgentResponse technicalBias = technicalAgent.analyze(latest);
         boolean isBullish = "BULLISH".equals(technicalBias.bias());
         boolean isBearish = "BEARISH".equals(technicalBias.bias());
-        
+
         if (!isBullish && !isBearish) {
             log.info("Market bias is Neutral. Skipping trade evaluation.");
             return;
@@ -119,11 +153,22 @@ public class DecisionAgent {
         String signalType = isBullish ? "BUY_CE" : "BUY_PE";
         int atmStrike = ((int) Math.round(spotPrice / 50.0)) * 50;
 
-        // Check for existing active duplicate signals for same strike and type to avoid redundant alerts
-        java.util.Optional<TradeSignal> activeSignal = tradeSignalRepository.findFirstByStrikeAndSignalTypeAndStatus(atmStrike, signalType, "ACTIVE");
-        if (activeSignal.isPresent()) {
-            log.info("Active signal already exists for strike {} and type {}. Skipping new signal generation.", atmStrike, signalType);
-            return;
+        // 2.5 Momentum confirmation: don't fight a strong opposing momentum tick.
+        if (momentumConfirmationEnabled) {
+            AgentResponse momentum = marketAgent.analyze(latest, prevSpot);
+            if ((isBullish && "BEARISH".equals(momentum.bias())) || (isBearish && "BULLISH".equals(momentum.bias()))) {
+                log.info("Momentum ({}) opposes {} direction. Skipping to avoid fighting the tape.", momentum.bias(), signalType);
+                return;
+            }
+        }
+
+        // 2.6 Entry timing: skip CE entries that are chasing an over-extended move above VWAP.
+        if (entryTimingEnabled && isBullish) {
+            AgentResponse timing = entryTimingAgent.validateEntry(latest, prevSpot);
+            if (timing.score() <= 30.0) {
+                log.info("Entry timing flags over-extension above VWAP. Waiting for a pullback. Skipping.");
+                return;
+            }
         }
 
         // 3. Compute ONNX model probability (direction-aware)
@@ -171,29 +216,90 @@ public class DecisionAgent {
         );
 
         double finalConfidence = criticResult.adjustedConfidence();
-        log.info("Final evaluated signal confidence: {}% (Threshold = {}%)", finalConfidence, gatingThreshold);
+        log.info("Final evaluated signal confidence: {}% (Effective threshold = {}%)", finalConfidence, effectiveGate);
 
-        // 5. Gating: Signal generated only if adjusted confidence >= gatingThreshold
-        if (finalConfidence < gatingThreshold) {
-            log.info("Signal confidence ({}%) below threshold. NO TRADE.", finalConfidence);
+        // 5. Gating: Signal generated only if adjusted confidence >= the effective gate.
+        if (finalConfidence < effectiveGate) {
+            log.info("Signal confidence ({}%) below threshold ({}%). NO TRADE.", finalConfidence, effectiveGate);
             return;
         }
 
-        // 6. Generate pricing levels from the real option premium (LTP).
-        double entry = optionPricingService.getOptionLtp(signalType, atmStrike);
+        // 6. Generate the direction-level thesis once and reuse it across the strike ladder
+        // (avoids 3x LLM cost; the thesis is about market direction, not the specific strike).
+        StringBuilder criticSummary = new StringBuilder();
+        for (CriticAgent.PenaltyDetails p : criticResult.appliedPenalties()) {
+            criticSummary.append(p.comment()).append("; ");
+        }
+        String thesis = llmService.generateTradeExplanation(
+                signalType, atmStrike, finalConfidence, rawResult.factorScores(), criticSummary.toString());
+
+        // 7. Strike ladder: emit a signal for every liquid, non-duplicate candidate strike
+        // (ITM / ATM / OTM). ITM has the highest delta so it captures the 2% premium move
+        // most reliably; ATM/OTM add trade count.
+        List<Integer> candidateStrikes = buildCandidateStrikes(atmStrike, isBullish);
+        int emitted = 0;
+        for (int strike : candidateStrikes) {
+            if (emitSignalForStrike(strike, signalType, isBullish, spotPrice, finalConfidence,
+                    modelConfidence, agentConfidence, rawConfidence, modelReady, rawResult, criticResult,
+                    optionChainEntities, thesis)) {
+                emitted++;
+            }
+        }
+        log.info("Strike-ladder evaluation complete: {} signal(s) emitted from {} candidate strike(s).",
+                emitted, candidateStrikes.size());
+    }
+
+    /** Builds the ITM/ATM/OTM candidate strikes for the ladder (ITM first). */
+    private List<Integer> buildCandidateStrikes(int atmStrike, boolean isBullish) {
+        if (!strikeLadderEnabled) {
+            return List.of(atmStrike);
+        }
+        int itm = isBullish ? atmStrike - strikeStep : atmStrike + strikeStep;
+        int otm = isBullish ? atmStrike + strikeStep : atmStrike - strikeStep;
+        return List.of(itm, atmStrike, otm);
+    }
+
+    /** Emits one signal for a strike if it is non-duplicate and liquid. Returns true if emitted. */
+    private boolean emitSignalForStrike(int strike, String signalType, boolean isBullish, double spotPrice,
+            double finalConfidence, double modelConfidence, double agentConfidence, double rawConfidence,
+            boolean modelReady, ConfidenceEngine.RawConfidenceResult rawResult, CriticAgent.CriticResult criticResult,
+            List<OptionSnapshot> optionChainEntities, String thesis) {
+
+        // Per-strike duplicate guard
+        if (tradeSignalRepository.findFirstByStrikeAndSignalTypeAndStatus(strike, signalType, "ACTIVE").isPresent()) {
+            log.info("Active signal already exists for strike {} {}. Skipping.", strike, signalType);
+            return false;
+        }
+
+        // Per-strike liquidity guard — never trade an illiquid strike where the 2% target is just spread.
+        OptionSnapshot strikeSnap = optionChainEntities.stream()
+                .filter(o -> o.getStrikePrice() != null && o.getStrikePrice() == strike)
+                .findFirst().orElse(null);
+        if (strikeSnap == null) {
+            log.info("No option snapshot for strike {}. Skipping.", strike);
+            return false;
+        }
+        AgentResponse liquidity = liquidityAgent.evaluateStrike(strikeSnap, isBullish);
+        if (liquidity.score() < minLiquidityScore) {
+            log.info("Strike {} liquidity {}% below minimum {}%. Skipping.", strike, liquidity.score(), minLiquidityScore);
+            return false;
+        }
+
+        // Pricing from the real option premium (LTP), with fallback. Target/SL formulas unchanged.
+        double entry = optionPricingService.getOptionLtp(signalType, strike);
         if (entry <= 0) {
             entry = 150.0; // fallback when live LTP is unavailable (simulation / no broker session)
-            log.info("Live option LTP unavailable for {} {}. Using fallback entry premium {}.", signalType, atmStrike, entry);
+            log.info("Live option LTP unavailable for {} {}. Using fallback entry premium {}.", signalType, strike, entry);
         }
-        double target1 = round2(entry * (1.0 + targetProfitPercent / 200.0)); // mid-point (half the target)
-        double target2 = round2(entry * (1.0 + targetProfitPercent / 100.0)); // primary profit target (e.g. +2%)
+        double target1 = round2(entry * (1.0 + targetProfitPercent / 200.0));
+        double target2 = round2(entry * (1.0 + targetProfitPercent / 100.0));
         double stopLoss = round2(entry * (1.0 - stopLossPercent / 100.0));
         int quantity = orderExecutionService.calculateQuantity(entry);
 
         TradeSignal signal = new TradeSignal();
         signal.setSignalTime(LocalDateTime.now());
         signal.setSignalType(signalType);
-        signal.setStrike(atmStrike);
+        signal.setStrike(strike);
         signal.setEntry(round2(entry));
         signal.setQuantity(quantity);
         signal.setStopLoss(stopLoss);
@@ -201,81 +307,72 @@ public class DecisionAgent {
         signal.setTarget2(target2);
         signal.setConfidence(finalConfidence);
         signal.setStatus("ACTIVE");
-
+        signal.setThesis(thesis);
         tradeSignalRepository.save(signal);
 
-        // 7. Save explanation factors
+        // Explanations: provenance + factor scores + critic penalties + liquidity.
         List<SignalExplanation> explanations = new ArrayList<>();
-
-        // Decision provenance: capture how the final confidence was derived so every
-        // signal is fully auditable (ONNX vs rule-based agent vs blend vs final).
         explanations.add(explanation("Model_ONNX", round2(modelConfidence),
                 "ONNX model directional confidence" + (modelReady ? "" : " (NOT used — model not ready)")));
         explanations.add(explanation("Agent_Weighted", round2(agentConfidence),
                 "Rule-based multi-agent weighted confidence"));
-        explanations.add(explanation("Blended_Raw", rawConfidence,
+        explanations.add(explanation("Blended_Raw", round2(rawConfidence),
                 modelReady
                         ? String.format("Blend: %.2f*ONNX + %.2f*Agent", modelWeight, 1.0 - modelWeight)
                         : "Agent-only (ONNX not ready)"));
         explanations.add(explanation("Final_Confidence", round2(finalConfidence),
                 String.format("After critic penalties; gating threshold = %.1f%%", gatingThreshold)));
+        explanations.add(explanation("Liquidity", round2(liquidity.score()),
+                "Strike liquidity score (" + strikeClass(strike, spotPrice, isBullish) + ")"));
+        for (Map.Entry<String, Double> entryScore : rawResult.factorScores().entrySet()) {
+            explanations.add(explanation(entryScore.getKey(), entryScore.getValue(),
+                    "Factor raw score = " + entryScore.getValue()));
+        }
+        for (CriticAgent.PenaltyDetails penalty : criticResult.appliedPenalties()) {
+            explanations.add(explanation(penalty.factor(), penalty.scoreAdjustment(), penalty.comment()));
+        }
         for (SignalExplanation e : explanations) {
             e.setSignal(signal);
         }
-
-        // Save raw weight components
-        for (Map.Entry<String, Double> entryScore : rawResult.factorScores().entrySet()) {
-            SignalExplanation exp = new SignalExplanation();
-            exp.setSignal(signal);
-            exp.setFactor(entryScore.getKey());
-            exp.setScore(entryScore.getValue());
-            exp.setComment("Factor raw score = " + entryScore.getValue());
-            explanations.add(exp);
-        }
-
-        // Save critic penalties
-        for (CriticAgent.PenaltyDetails penalty : criticResult.appliedPenalties()) {
-            SignalExplanation exp = new SignalExplanation();
-            exp.setSignal(signal);
-            exp.setFactor(penalty.factor());
-            exp.setScore(penalty.scoreAdjustment());
-            exp.setComment(penalty.comment());
-            explanations.add(exp);
-        }
-
         signalExplanationRepository.saveAll(explanations);
-        log.info("Saved trade signal (id={}) and {} scoring explanations.", signal.getId(), explanations.size());
+        log.info("Saved trade signal (id={}, strike={}) and {} scoring explanations.", signal.getId(), strike, explanations.size());
 
-        // Generate natural language trade explanation from LLM
-        StringBuilder criticSummary = new StringBuilder();
-        for (CriticAgent.PenaltyDetails p : criticResult.appliedPenalties()) {
-            criticSummary.append(p.comment()).append("; ");
-        }
-        String explanation = llmService.generateTradeExplanation(
-                signalType, 
-                atmStrike, 
-                finalConfidence, 
-                rawResult.factorScores(), 
-                criticSummary.toString()
-        );
-        
-        signal.setThesis(explanation);
-        tradeSignalRepository.save(signal);
-
-        // 8. Notify via Telegram Bot
+        // Notify via Telegram Bot
         List<String> reasons = new ArrayList<>();
-        reasons.add("*Thesis:* " + explanation);
+        reasons.add("*Thesis:* " + thesis);
         reasons.add(isBullish ? "Bullish trend structure" : "Bearish trend structure");
-        reasons.add("PCR bias is " + (isBullish ? "Supportive" : "Resistant"));
-        reasons.add("VWAP Breakout verified");
+        reasons.add("Strike " + strike + " (" + strikeClass(strike, spotPrice, isBullish) + ") — liquidity confirmed");
         for (CriticAgent.PenaltyDetails p : criticResult.appliedPenalties()) {
             reasons.add("Critic Penalty: " + p.comment());
         }
-
         telegramBotService.sendSignal(signal, reasons);
 
-        // 9. Execute Order via Angel One
-        orderExecutionService.executeOrder(signalType, atmStrike, spotPrice);
+        // Execute Order via Angel One
+        orderExecutionService.executeOrder(signalType, strike, spotPrice);
+        return true;
+    }
+
+    /** Classifies a strike as ITM/ATM/OTM relative to spot for the given direction. */
+    private static String strikeClass(int strike, double spot, boolean isBullish) {
+        int atm = ((int) Math.round(spot / 50.0)) * 50;
+        if (strike == atm) {
+            return "ATM";
+        }
+        boolean itm = isBullish ? strike < atm : strike > atm;
+        return itm ? "ITM" : "OTM";
+    }
+
+    /** True during the volatile open (09:15–09:30) and theta-heavy close (15:00–15:30) IST windows. */
+    private boolean inVolatileWindow() {
+        java.time.ZonedDateTime ist = java.time.ZonedDateTime.now(java.time.ZoneId.of("Asia/Kolkata"));
+        java.time.DayOfWeek day = ist.getDayOfWeek();
+        if (day == java.time.DayOfWeek.SATURDAY || day == java.time.DayOfWeek.SUNDAY) {
+            return false; // weekend runs are simulation; don't block.
+        }
+        java.time.LocalTime t = ist.toLocalTime();
+        boolean openWhipsaw = !t.isBefore(java.time.LocalTime.of(9, 15)) && t.isBefore(java.time.LocalTime.of(9, 30));
+        boolean lateSessionTheta = !t.isBefore(java.time.LocalTime.of(15, 0)) && t.isBefore(java.time.LocalTime.of(15, 30));
+        return openWhipsaw || lateSessionTheta;
     }
 
     private static double round2(double value) {

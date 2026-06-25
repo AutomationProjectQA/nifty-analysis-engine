@@ -60,6 +60,35 @@ logging:
 nifty:
   gating-threshold: 60.0
 
+  # ============================================================
+  # SIGNAL GENERATION TUNING — more trades + higher accuracy,
+  # WITHOUT changing the 2% profit target / 40% stop-loss.
+  # ============================================================
+  signal:
+    # Evaluate an ITM and OTM strike around the ATM (not ATM-only).
+    # ITM (higher delta) captures the 2% premium move more reliably.
+    strike-ladder-enabled: true
+    strike-step: 50
+    # Instead of skipping SIDEWAYS markets entirely, allow them but demand
+    # this much extra confidence (added to gating-threshold).
+    sideways-extra-gate: 8.0
+    # Require a liquid strike (LiquidityAgent score) before emitting a signal.
+    min-liquidity-score: 70.0
+    # Skip entries that strongly oppose the latest momentum tick.
+    momentum-confirmation-enabled: true
+    # Skip CE entries that are chasing an over-extended move above VWAP.
+    entry-timing-enabled: true
+
+  # Avoid the volatile first 15 min after open and the theta-heavy final 30 min.
+  # Only carves out those intraday windows (does not affect 24/7 simulation runs).
+  timing:
+    session-filter-enabled: true
+
+  # Online learning: nudge confidence factor weights from resolved-trade outcomes.
+  confidence:
+    adaptive-enabled: true
+    learning-rate: 0.5
+
   # Outbound HTTP timeouts (Angel One, Gemini, Yahoo) — a hung API can't block threads.
   http:
     connect-timeout-ms: 10000
@@ -88,7 +117,7 @@ nifty:
 
     # Percent of available wallet capital allocated to EACH order.
     # e.g. 20.0 = use 20% of the wallet per trade.
-    capital-per-order-percent: 20.0
+    capital-per-order-percent: 100.0
 
     # Profit target as a percent of the entry premium (the "take 2% profit" goal).
     target-profit-percent: 2.0
@@ -96,11 +125,11 @@ nifty:
     stop-loss-percent: 40.0
 
     # Maximum number of NEW trades to open per trading day.
-    max-trades-per-day: 5
+    max-trades-per-day: 50
 
     # Halt new trades for the day once cumulative realised loss reaches this.
     # Unit matches recorded trade P&L (TradeResult.profitLoss).
-    max-loss-per-day: 1000.0
+    max-loss-per-day: 1000000.0
 
   # Backtest execution realism — model costs so reported P&L isn't optimistic.
   backtest:

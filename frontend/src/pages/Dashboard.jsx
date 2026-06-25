@@ -67,15 +67,15 @@ const Dashboard = () => {
 
   // Volatility regime from the live VIX level (no fabricated "change").
   let vixLabel = 'Moderate volatility';
-  let vixColor = '#ffb300';
+  let vixColor = 'warning.main';
   if (marketData.indiaVix < 13) {
     vixLabel = 'Low volatility';
-    vixColor = '#26a69a';
+    vixColor = 'primary.main';
   } else if (marketData.indiaVix > 18) {
     vixLabel = 'High volatility';
-    vixColor = '#ef5350';
+    vixColor = 'secondary.main';
   }
-  
+
   // Calculate dynamic Pivot support/resistance bounds based on Spot
   const pivotPoint = marketData.niftySpot;
   const r1 = Math.round((pivotPoint * 1.005) / 50) * 50;
@@ -83,18 +83,23 @@ const Dashboard = () => {
   const s1 = Math.round((pivotPoint * 0.995) / 50) * 50;
   const s2 = Math.round((pivotPoint * 0.988) / 50) * 50;
 
+  // Proximity bar (0-100): how close spot is to each level. The farthest level
+  // (the band edge) anchors the scale, so the nearest level reads as most "full".
+  const maxBand = Math.max(Math.abs(r2 - pivotPoint), Math.abs(pivotPoint - s2), 1);
+  const proximity = (level) => Math.round(Math.max(8, Math.min(100, 100 * (1 - Math.abs(level - pivotPoint) / maxBand))));
+
   // Determine trend status
   let trendBias = 'Neutral / Sideways';
-  let trendColor = '#ffb300';
+  let trendColor = 'warning.main';
   let TrendIcon = SwapCallsIcon;
 
   if (marketData.niftySpot > marketData.ema20 && marketData.ema20 > marketData.ema50) {
     trendBias = 'Bullish Expansion';
-    trendColor = '#26a69a';
+    trendColor = 'primary.main';
     TrendIcon = TrendingUpIcon;
   } else if (marketData.niftySpot < marketData.ema20 && marketData.ema20 < marketData.ema50) {
     trendBias = 'Bearish Retracement';
-    trendColor = '#ef5350';
+    trendColor = 'secondary.main';
     TrendIcon = TrendingDownIcon;
   }
 
@@ -127,7 +132,7 @@ const Dashboard = () => {
               <Typography variant="h4" sx={{ fontWeight: 700, mt: 1, fontFamily: 'Outfit, sans-serif' }}>
                 {marketData.niftySpot.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, gap: 0.5, color: spotAboveVwap ? '#26a69a' : '#ef5350' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, gap: 0.5, color: spotAboveVwap ? 'primary.main' : 'secondary.main' }}>
                 {spotAboveVwap ? <TrendingUpIcon fontSize="small" /> : <TrendingDownIcon fontSize="small" />}
                 <Typography variant="body2" sx={{ fontWeight: 600 }}>
                   {spotAboveVwap ? '+' : ''}{spotVwapDistance.toFixed(2)} ({spotVwapPct.toFixed(2)}%) vs VWAP
@@ -146,7 +151,10 @@ const Dashboard = () => {
                 {marketData.niftyFuture.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </Typography>
               <Typography variant="body2" sx={{ color: 'text.secondary', mt: 1 }}>
-                Spread: <span style={{ color: '#26a69a', fontWeight: 600 }}>+{spotFutureSpread.toFixed(2)} pts</span>
+                Spread:{' '}
+                <Box component="span" sx={{ color: spotFutureSpread >= 0 ? 'primary.main' : 'secondary.main', fontWeight: 600 }}>
+                  {spotFutureSpread >= 0 ? '+' : ''}{spotFutureSpread.toFixed(2)} pts
+                </Box>
               </Typography>
             </CardContent>
           </Card>
@@ -169,7 +177,7 @@ const Dashboard = () => {
 
         {/* TREND REGIME */}
         <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <Card sx={{ borderLeft: `4px solid ${trendColor}` }}>
+          <Card sx={{ borderLeft: 4, borderColor: trendColor }}>
             <CardContent>
               <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>MARKET TREND</Typography>
               <Typography variant="h5" sx={{ fontWeight: 700, mt: 1.5, color: trendColor, fontFamily: 'Outfit, sans-serif', display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -177,7 +185,8 @@ const Dashboard = () => {
                 {trendBias}
               </Typography>
               <Typography variant="body2" sx={{ color: 'text.secondary', mt: 1 }}>
-                RSI (14): <span style={{ color: '#ffffff', fontWeight: 600 }}>{marketData.rsi.toFixed(2)}</span>
+                RSI (14):{' '}
+                <Box component="span" sx={{ color: 'text.primary', fontWeight: 600 }}>{marketData.rsi.toFixed(2)}</Box>
               </Typography>
             </CardContent>
           </Card>
@@ -208,23 +217,23 @@ const Dashboard = () => {
                 {/* R2 */}
                 <Box>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                    <Typography variant="body2" sx={{ color: '#ef5350', fontWeight: 600 }}>Resistance 2 (R2)</Typography>
+                    <Typography variant="body2" sx={{ color: 'secondary.main', fontWeight: 600 }}>Resistance 2 (R2)</Typography>
                     <Typography variant="body2" sx={{ fontWeight: 700 }}>{r2}</Typography>
                   </Box>
-                  <LinearProgress variant="determinate" value={45} color="secondary" sx={{ height: 6, borderRadius: 3, bgcolor: '#1e222d' }} />
+                  <LinearProgress variant="determinate" value={proximity(r2)} color="secondary" sx={{ height: 6, borderRadius: 3, bgcolor: 'divider' }} />
                 </Box>
 
                 {/* R1 */}
                 <Box>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                    <Typography variant="body2" sx={{ color: '#ef5350', fontWeight: 600 }}>Resistance 1 (R1)</Typography>
+                    <Typography variant="body2" sx={{ color: 'secondary.main', fontWeight: 600 }}>Resistance 1 (R1)</Typography>
                     <Typography variant="body2" sx={{ fontWeight: 700 }}>{r1}</Typography>
                   </Box>
-                  <LinearProgress variant="determinate" value={75} color="secondary" sx={{ height: 6, borderRadius: 3, bgcolor: '#1e222d' }} />
+                  <LinearProgress variant="determinate" value={proximity(r1)} color="secondary" sx={{ height: 6, borderRadius: 3, bgcolor: 'divider' }} />
                 </Box>
 
                 {/* Spot reference */}
-                <Box sx={{ py: 1, borderTop: '1px dashed #1e222d', borderBottom: '1px dashed #1e222d', display: 'flex', justifyContent: 'space-between' }}>
+                <Box sx={{ py: 1, borderTop: '1px dashed', borderBottom: '1px dashed', borderColor: 'divider', display: 'flex', justifyContent: 'space-between' }}>
                   <Typography variant="body2" sx={{ fontWeight: 600 }}>Nifty Spot Reference</Typography>
                   <Typography variant="body2" sx={{ fontWeight: 700, color: 'primary.main' }}>
                     {Math.round(marketData.niftySpot)}
@@ -234,24 +243,24 @@ const Dashboard = () => {
                 {/* S1 */}
                 <Box>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                    <Typography variant="body2" sx={{ color: '#26a69a', fontWeight: 600 }}>Support 1 (S1)</Typography>
+                    <Typography variant="body2" sx={{ color: 'primary.main', fontWeight: 600 }}>Support 1 (S1)</Typography>
                     <Typography variant="body2" sx={{ fontWeight: 700 }}>{s1}</Typography>
                   </Box>
-                  <LinearProgress variant="determinate" value={75} color="primary" sx={{ height: 6, borderRadius: 3, bgcolor: '#1e222d' }} />
+                  <LinearProgress variant="determinate" value={proximity(s1)} color="primary" sx={{ height: 6, borderRadius: 3, bgcolor: 'divider' }} />
                 </Box>
 
                 {/* S2 */}
                 <Box>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                    <Typography variant="body2" sx={{ color: '#26a69a', fontWeight: 600 }}>Support 2 (S2)</Typography>
+                    <Typography variant="body2" sx={{ color: 'primary.main', fontWeight: 600 }}>Support 2 (S2)</Typography>
                     <Typography variant="body2" sx={{ fontWeight: 700 }}>{s2}</Typography>
                   </Box>
-                  <LinearProgress variant="determinate" value={45} color="primary" sx={{ height: 6, borderRadius: 3, bgcolor: '#1e222d' }} />
+                  <LinearProgress variant="determinate" value={proximity(s2)} color="primary" sx={{ height: 6, borderRadius: 3, bgcolor: 'divider' }} />
                 </Box>
 
               </Box>
 
-              <Alert severity="info" sx={{ mt: 4, bgcolor: '#171b26', border: '1px solid #1e222d', color: '#b2b5be' }}>
+              <Alert severity="info" sx={{ mt: 4, bgcolor: 'action.hover', border: '1px solid', borderColor: 'divider', color: 'text.secondary' }}>
                 Levels calculated mathematically using standard daily price pivots relative to yesterday close.
               </Alert>
 

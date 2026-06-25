@@ -48,6 +48,7 @@ public class MarketCollectorService {
     private final TelegramBotService telegramBotService;
     private final LlmService llmService;
     private final MarketStreamPublisher marketStreamPublisher;
+    private final com.nifty.analysis.engine.ConfidenceWeightTuner confidenceWeightTuner;
 
     @org.springframework.beans.factory.annotation.Value("${nifty.order-execution.lot-size:65}")
     private int lotSize;
@@ -236,6 +237,9 @@ public class MarketCollectorService {
                 result.setAccuracy(0.0);
                 tradeResultRepository.save(result);
 
+                // Learn from the loss: discount factors that were confident yet wrong.
+                confidenceWeightTuner.reinforce(signal, false);
+
                 // Asynchronously trigger post-mortem reflection for the failed trade
                 List<MarketSnapshot> context = marketSnapshotRepository.findBetween(signal.getSignalTime(),
                         latest.getSnapshotTime());
@@ -271,6 +275,9 @@ public class MarketCollectorService {
                         java.time.Duration.between(signal.getSignalTime(), latest.getSnapshotTime()).toSeconds());
                 result.setAccuracy(100.0);
                 tradeResultRepository.save(result);
+
+                // Learn from the win: reinforce the factors that were confident and right.
+                confidenceWeightTuner.reinforce(signal, true);
 
                 String msg = String.format("🎉 *TRADE RESOLVED: TARGET 2 HIT*\n\n" +
                         "*Signal:* %s Strike %d\n" +

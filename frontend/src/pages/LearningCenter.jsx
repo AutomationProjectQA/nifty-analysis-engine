@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Card, CardContent, Typography, Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Chip } from '@mui/material';
+import { Box, Card, CardContent, Typography, Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Chip, CircularProgress } from '@mui/material';
 import Grid from '@mui/material/Grid';
 import ReactMarkdown from 'react-markdown';
 import SchoolIcon from '@mui/icons-material/School';
 import SearchIcon from '@mui/icons-material/Search';
+import SearchOffIcon from '@mui/icons-material/SearchOff';
 import api from '../api/client';
 
 import AdSenseSlot from '../components/AdSenseSlot';
@@ -72,11 +73,13 @@ Traders watch the Max Pain strike as a strong magnet on expiry days. If Nifty sp
 
 const LearningCenter = () => {
   const [articles, setArticles] = useState(mockArticles);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selectedArticle, setSelectedArticle] = useState(null);
   const [activeCategory, setActiveCategory] = useState('ALL');
 
   const fetchArticles = async () => {
+    setLoading(true);
     try {
       const response = await api.get('/api/v1/learning/articles');
       if (response.data && response.data.length > 0) {
@@ -84,6 +87,8 @@ const LearningCenter = () => {
       }
     } catch (e) {
       console.warn("Backend down, showing simulated articles.", e.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -119,7 +124,7 @@ const LearningCenter = () => {
               startAdornment: <SearchIcon sx={{ color: 'text.secondary', mr: 1 }} />
             }
           }}
-          sx={{ width: 300, bgcolor: '#131722', borderRadius: 1 }}
+          sx={{ width: { xs: '100%', sm: 300 }, bgcolor: 'background.paper', borderRadius: 1 }}
         />
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
           {categories.map((cat) => (
@@ -130,9 +135,9 @@ const LearningCenter = () => {
               sx={{
                 fontWeight: 600,
                 cursor: 'pointer',
-                bgcolor: activeCategory === cat ? 'primary.main' : '#131722',
-                color: activeCategory === cat ? '#000000' : 'text.secondary',
-                '&:hover': { bgcolor: activeCategory === cat ? 'primary.main' : '#1e222d' }
+                bgcolor: activeCategory === cat ? 'primary.main' : 'background.paper',
+                color: activeCategory === cat ? 'background.default' : 'text.secondary',
+                '&:hover': { bgcolor: activeCategory === cat ? 'primary.main' : 'action.hover' }
               }}
             />
           ))}
@@ -140,24 +145,36 @@ const LearningCenter = () => {
       </Box>
 
       {/* Grid of Articles */}
-      <Grid container spacing={3}>
-        {filteredArticles.map((art) => (
-          <Grid key={art.slug} size={{ xs: 12, md: 4 }}>
-            <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-              <CardContent>
-                <Chip label={art.category} size="small" sx={{ mb: 2, bgcolor: '#1e222d', fontWeight: 600, color: 'primary.main' }} />
-                <Typography variant="h6" sx={{ fontWeight: 700, mb: 1.5, fontFamily: 'Outfit, sans-serif' }}>{art.title}</Typography>
-                <Typography variant="body2" sx={{ color: 'text.secondary', mb: 2, lineHeight: 1.5 }}>{art.summary}</Typography>
-              </CardContent>
-              <Box sx={{ p: 2, pt: 0 }}>
-                <Button variant="outlined" fullWidth onClick={() => setSelectedArticle(art)}>
-                  Read Guide
-                </Button>
-              </Box>
-            </Card>
-          </Grid>
-        ))}
-      </Grid>
+      {loading ? (
+        <Box sx={{ display: 'flex', justifyContent: 'center', p: 8 }}><CircularProgress /></Box>
+      ) : filteredArticles.length === 0 ? (
+        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5, py: 8, color: 'text.secondary' }}>
+          <SearchOffIcon sx={{ fontSize: 48, color: 'text.disabled' }} />
+          <Typography variant="body1">No guides match your search.</Typography>
+          {(search || activeCategory !== 'ALL') && (
+            <Button variant="text" onClick={() => { setSearch(''); setActiveCategory('ALL'); }}>Clear filters</Button>
+          )}
+        </Box>
+      ) : (
+        <Grid container spacing={3}>
+          {filteredArticles.map((art) => (
+            <Grid key={art.slug} size={{ xs: 12, sm: 6, md: 4 }}>
+              <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                <CardContent>
+                  <Chip label={art.category} size="small" sx={{ mb: 2, bgcolor: 'action.hover', fontWeight: 600, color: 'primary.main' }} />
+                  <Typography variant="h6" sx={{ fontWeight: 700, mb: 1.5, fontFamily: 'Outfit, sans-serif' }}>{art.title}</Typography>
+                  <Typography variant="body2" sx={{ color: 'text.secondary', mb: 2, lineHeight: 1.5 }}>{art.summary}</Typography>
+                </CardContent>
+                <Box sx={{ p: 2, pt: 0 }}>
+                  <Button variant="outlined" fullWidth onClick={() => setSelectedArticle(art)}>
+                    Read Guide
+                  </Button>
+                </Box>
+              </Card>
+            </Grid>
+          ))}
+        </Grid>
+      )}
 
       {/* Dialog for Reading Article */}
       <Dialog 
@@ -166,30 +183,31 @@ const LearningCenter = () => {
         maxWidth="md"
         fullWidth
         PaperProps={{
-          sx: { bgcolor: '#131722', border: '1px solid #1e222d', borderRadius: 3 }
+          sx: { bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 3 }
         }}
       >
         {selectedArticle && (
           <>
-            <DialogTitle sx={{ fontFamily: 'Outfit, sans-serif', fontWeight: 700, borderBottom: '1px solid #1e222d', pb: 2 }}>
+            <DialogTitle sx={{ fontFamily: 'Outfit, sans-serif', fontWeight: 700, borderBottom: '1px solid', borderColor: 'divider', pb: 2 }}>
               {selectedArticle.title}
             </DialogTitle>
             <DialogContent sx={{ mt: 2 }}>
               {/* Insert AdSense Slot inside the reading view */}
               <AdSenseSlot adSlot="learning-article-inline" />
 
-              <Box className="markdown-report-body" sx={{ 
+              <Box className="markdown-report-body" sx={{
                 color: 'text.primary',
                 '& h3': { fontFamily: 'Outfit, sans-serif', fontSize: '1.2rem', fontWeight: 700, mt: 3, mb: 1.5, color: 'primary.main' },
+                '& h4': { fontSize: '1.05rem', fontWeight: 600, mt: 2.5, mb: 1, color: 'text.primary' },
                 '& p': { mb: 2, lineHeight: 1.6, color: 'text.secondary' },
-                '& ul': { pl: 2, mb: 2 },
+                '& ul, & ol': { pl: 2.5, mb: 2 },
                 '& li': { mb: 1, lineHeight: 1.6, color: 'text.secondary' },
-                '& strong': { color: '#ffffff' }
+                '& strong': { color: 'text.primary' }
               }}>
                 <ReactMarkdown>{selectedArticle.content}</ReactMarkdown>
               </Box>
             </DialogContent>
-            <DialogActions sx={{ borderTop: '1px solid #1e222d', p: 2 }}>
+            <DialogActions sx={{ borderTop: '1px solid', borderColor: 'divider', p: 2 }}>
               <Button onClick={() => setSelectedArticle(null)} variant="contained">
                 Close Guide
               </Button>

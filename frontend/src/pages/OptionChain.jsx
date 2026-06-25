@@ -142,7 +142,7 @@ const OptionChain = () => {
           <Card>
             <CardContent>
               <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>OVERALL PCR (OI)</Typography>
-              <Typography variant="h4" sx={{ fontWeight: 700, mt: 1, fontFamily: 'Outfit, sans-serif', color: parseFloat(overallPcr) >= 1.0 ? '#26a69a' : '#ef5350' }}>
+              <Typography variant="h4" sx={{ fontWeight: 700, mt: 1, fontFamily: 'Outfit, sans-serif', color: parseFloat(overallPcr) >= 1.0 ? 'primary.main' : 'secondary.main' }}>
                 {overallPcr}
               </Typography>
             </CardContent>
@@ -152,7 +152,7 @@ const OptionChain = () => {
           <Card>
             <CardContent>
               <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>MAX PAIN STRIKE</Typography>
-              <Typography variant="h4" sx={{ fontWeight: 700, mt: 1, fontFamily: 'Outfit, sans-serif', color: '#ffb300' }}>
+              <Typography variant="h4" sx={{ fontWeight: 700, mt: 1, fontFamily: 'Outfit, sans-serif', color: 'warning.main' }}>
                 {maxPainVal.toLocaleString('en-IN')}
               </Typography>
             </CardContent>
@@ -180,9 +180,9 @@ const OptionChain = () => {
         </CardContent>
       </Card>
 
-      {/* Option Chain Table */}
-      <TableContainer component={Paper} sx={{ border: '1px solid #1e222d', maxHeight: 650, borderRadius: 2 }}>
-        <Table stickyHeader size="small">
+      {/* Option Chain Table — flows with the page (no inner scroll) */}
+      <TableContainer component={Paper} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, overflowX: 'auto' }}>
+        <Table size="small">
           <TableHead>
             <TableRow>
               {/* Calls Side */}
@@ -241,8 +241,14 @@ const OptionChain = () => {
                   </TableCell>
 
                   {/* STRIKE PRICE */}
-                  <TableCell align="center" sx={{ bgcolor: isAtm ? 'rgba(38, 166, 154, 0.15)' : '#171b26', fontWeight: 700, borderLeft: '1px solid #1e222d', borderRight: '1px solid #1e222d' }}>
-                    {row.strikePrice}
+                  <TableCell align="center" sx={{ bgcolor: isAtm ? 'rgba(38, 166, 154, 0.18)' : '#171b26', fontWeight: 700, borderLeft: '1px solid', borderRight: '1px solid', borderColor: 'divider' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.75 }}>
+                      {row.strikePrice}
+                      {isAtm && (
+                        <Chip label="ATM" size="small" color="primary"
+                          sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700, '& .MuiChip-label': { px: 0.75 } }} />
+                      )}
+                    </Box>
                   </TableCell>
 
                   {/* PE OI */}

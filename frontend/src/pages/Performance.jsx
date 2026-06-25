@@ -18,10 +18,10 @@ const fmtDuration = (secs) => {
 
 const StatCard = ({ label, value, color }) => (
   <Grid size={{ xs: 6, sm: 4, md: 2 }}>
-    <Card sx={{ bgcolor: '#171b26', border: '1px solid #1e222d', height: '100%' }}>
+    <Card sx={{ height: '100%' }}>
       <CardContent>
-        <Typography variant="caption" sx={{ color: '#787b86' }}>{label}</Typography>
-        <Typography variant="h6" sx={{ fontWeight: 700, color: color || '#d1d4dc', mt: 0.5 }}>
+        <Typography variant="caption" sx={{ color: 'text.secondary' }}>{label}</Typography>
+        <Typography variant="h6" sx={{ fontWeight: 700, color: color || 'text.primary', mt: 0.5 }}>
           {value}
         </Typography>
       </CardContent>
@@ -60,7 +60,10 @@ const Performance = () => {
 
   // --- Backtest runner ---
   const today = new Date().toISOString().slice(0, 10);
-  const [startDate, setStartDate] = useState('');
+  // Default the range to the last 30 days so the date inputs show real values
+  // instead of rendering as empty/broken-looking fields.
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const [startDate, setStartDate] = useState(thirtyDaysAgo);
   const [endDate, setEndDate] = useState(today);
   const [backtest, setBacktest] = useState(null);
   const [btLoading, setBtLoading] = useState(false);
@@ -94,7 +97,7 @@ const Performance = () => {
       <Typography variant="h5" sx={{ fontWeight: 700, mb: 3 }}>Performance &amp; Backtesting</Typography>
 
       {/* Live summary */}
-      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1.5, color: '#b2b5be' }}>
+      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1.5, color: 'text.secondary' }}>
         Live Trade Performance (all time)
       </Typography>
 
@@ -110,37 +113,39 @@ const Performance = () => {
         <Grid container spacing={2} sx={{ mb: 4 }}>
           <StatCard label="Total Trades" value={summary.totalTrades} />
           <StatCard label="Win Rate" value={`${summary.winRatePercentage}%`}
-            color={summary.winRatePercentage >= 50 ? '#26a69a' : '#ef5350'} />
+            color={summary.winRatePercentage >= 50 ? 'primary.main' : 'secondary.main'} />
           <StatCard label="Net P&L" value={fmtInr(summary.totalProfitLossInr)}
-            color={summary.totalProfitLossInr >= 0 ? '#26a69a' : '#ef5350'} />
-          <StatCard label="Target Hits" value={summary.target2Hits} color="#26a69a" />
-          <StatCard label="Stop-Loss Hits" value={summary.stopLossHits} color="#ef5350" />
-          <StatCard label="Expired" value={summary.expiredTrades} color="#787b86" />
+            color={summary.totalProfitLossInr >= 0 ? 'primary.main' : 'secondary.main'} />
+          <StatCard label="Target Hits" value={summary.target2Hits} color="primary.main" />
+          <StatCard label="Stop-Loss Hits" value={summary.stopLossHits} color="secondary.main" />
+          <StatCard label="Expired" value={summary.expiredTrades} color="text.secondary" />
         </Grid>
       )}
 
       {/* Backtest runner */}
-      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1.5, mt: 2, color: '#b2b5be' }}>
+      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1.5, mt: 2, color: 'text.secondary' }}>
         Run a Backtest
       </Typography>
-      <Card sx={{ bgcolor: '#171b26', border: '1px solid #1e222d', mb: 3 }}>
+      <Card sx={{ mb: 3 }}>
         <CardContent>
           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
             <TextField
               label="Start date" type="date" size="small"
               InputLabelProps={{ shrink: true }}
+              inputProps={{ max: endDate || today }}
               value={startDate} onChange={(e) => setStartDate(e.target.value)}
             />
             <TextField
               label="End date" type="date" size="small"
               InputLabelProps={{ shrink: true }}
+              inputProps={{ min: startDate, max: today }}
               value={endDate} onChange={(e) => setEndDate(e.target.value)}
             />
             <Button variant="contained" onClick={runBacktest} disabled={btLoading}>
               {btLoading ? <CircularProgress size={22} color="inherit" /> : 'Run Backtest'}
             </Button>
           </Box>
-          <Typography variant="caption" sx={{ color: '#787b86', mt: 1, display: 'block' }}>
+          <Typography variant="caption" sx={{ color: 'text.secondary', mt: 1, display: 'block' }}>
             Replays historical snapshots through the live decision logic, with brokerage, slippage &amp; theta modeled.
           </Typography>
         </CardContent>
@@ -158,15 +163,15 @@ const Performance = () => {
           <Grid container spacing={2}>
             <StatCard label="Signals" value={backtest.totalSignals} />
             <StatCard label="Win Rate" value={`${backtest.winRatePercentage}%`}
-              color={backtest.winRatePercentage >= 50 ? '#26a69a' : '#ef5350'} />
+              color={backtest.winRatePercentage >= 50 ? 'primary.main' : 'secondary.main'} />
             <StatCard label="Net P&L" value={fmtInr(backtest.netPnlInr)}
-              color={backtest.netPnlInr >= 0 ? '#26a69a' : '#ef5350'} />
+              color={backtest.netPnlInr >= 0 ? 'primary.main' : 'secondary.main'} />
             <StatCard label="Gross P&L" value={fmtInr(backtest.grossPnlInr)} />
-            <StatCard label="Costs" value={fmtInr(backtest.totalCostsInr)} color="#ef5350" />
+            <StatCard label="Costs" value={fmtInr(backtest.totalCostsInr)} color="secondary.main" />
             <StatCard label="Avg Hold" value={fmtDuration(backtest.avgHoldingSeconds)} />
-            <StatCard label="Target Hits" value={backtest.target2Hits} color="#26a69a" />
-            <StatCard label="Stop-Loss Hits" value={backtest.stopLossHits} color="#ef5350" />
-            <StatCard label="Expired" value={backtest.expired} color="#787b86" />
+            <StatCard label="Target Hits" value={backtest.target2Hits} color="primary.main" />
+            <StatCard label="Stop-Loss Hits" value={backtest.stopLossHits} color="secondary.main" />
+            <StatCard label="Expired" value={backtest.expired} color="text.secondary" />
             <StatCard label="Target1 Touches" value={backtest.target1Touches} />
           </Grid>
         </Box>
