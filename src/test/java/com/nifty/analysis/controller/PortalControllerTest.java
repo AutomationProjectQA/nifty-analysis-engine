@@ -8,6 +8,7 @@ import com.nifty.analysis.repository.AiReportRepository;
 import com.nifty.analysis.repository.LearningArticleRepository;
 import com.nifty.analysis.repository.MarketNewsRepository;
 import com.nifty.analysis.repository.TradeSignalRepository;
+import com.nifty.analysis.service.ContentGenerationService;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -44,6 +45,9 @@ public class PortalControllerTest {
 
     @MockBean
     private TradeSignalRepository tradeSignalRepository;
+
+    @MockBean
+    private ContentGenerationService contentGenerationService;
 
     @Test
     public void testGetLatestReport() throws Exception {

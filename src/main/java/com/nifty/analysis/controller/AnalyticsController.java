@@ -42,9 +42,14 @@ public class AnalyticsController {
     }
 
     @GetMapping("/summary")
-    public ResponseEntity<Map<String, Object>> getSummary() {
-        List<TradeResult> results = tradeResultRepository.findAll();
-        
+    public ResponseEntity<Map<String, Object>> getSummary(
+            @RequestParam(value = "start", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime start,
+            @RequestParam(value = "end", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime end
+    ) {
+        List<TradeResult> results = (start != null && end != null)
+                ? tradeResultRepository.findBySignalTimeBetween(start, end)
+                : tradeResultRepository.findAll();
+
         long totalTrades = results.size();
         long target1Hits = results.stream().filter(r -> "TARGET1".equals(r.getOutcome())).count();
         long target2Hits = results.stream().filter(r -> "TARGET2".equals(r.getOutcome())).count();
@@ -60,7 +65,7 @@ public class AnalyticsController {
         summary.put("target2Hits", target2Hits);
         summary.put("stopLossHits", slHits);
         summary.put("expiredTrades", expired);
-        summary.put("totalProfitLossPoints", Math.round(totalPnL * 100.0) / 100.0);
+        summary.put("totalProfitLossInr", Math.round(totalPnL * 100.0) / 100.0);
         summary.put("winRatePercentage", Math.round(winRate * 100.0) / 100.0);
 
         return ResponseEntity.ok(summary);

@@ -7,6 +7,7 @@ import com.nifty.analysis.repository.MarketCandleRepository;
 import com.nifty.analysis.repository.MarketSnapshotRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
 
@@ -21,6 +22,12 @@ public class MarketRegimeAgent {
 
     private final MarketSnapshotRepository marketSnapshotRepository;
     private final MarketCandleRepository marketCandleRepository;
+
+    // Sideways-detection sensitivity: a regime is flagged SIDEWAYS when recent price
+    // std-dev falls below this fraction of ATR. Lower = fewer markets flagged sideways
+    // (the original 0.25 was aggressive and silently blocked most trades).
+    @Value("${nifty.regime.sideways-atr-factor:0.10}")
+    private double sidewaysAtrFactor;
 
     public AgentResponse analyze() {
         return analyze(LocalDateTime.now());
@@ -55,7 +62,7 @@ public class MarketRegimeAgent {
             double stdDev = Math.sqrt(sumSquares / history.size());
 
             double atr = calculateAtr(evaluationTime);
-            double sidewaysThreshold = 0.25 * atr;
+            double sidewaysThreshold = sidewaysAtrFactor * atr;
 
             // If price standard deviation over last 15-30 snapshots is less than 0.25 * ATR, it is sideways
             if (stdDev < sidewaysThreshold) {

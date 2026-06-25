@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Card, CardContent, Typography, Accordion, AccordionSummary, AccordionDetails, Chip, CircularProgress } from '@mui/material';
+import { Box, Card, CardContent, Typography, Accordion, AccordionSummary, AccordionDetails, Chip, CircularProgress, Button, Alert } from '@mui/material';
 import Grid from '@mui/material/Grid';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import BoltIcon from '@mui/icons-material/Bolt';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import GavelIcon from '@mui/icons-material/Gavel';
-import axios from 'axios';
+import api from '../api/client';
+import { subscribe } from '../api/marketStream';
 
 // Mock signals if backend is down
 const mockSignals = [
@@ -53,22 +54,27 @@ const mockSignals = [
 const AiSignals = () => {
   const [signals, setSignals] = useState(mockSignals);
   const [activeTab, setActiveTab] = useState('ALL'); // ALL, ACTIVE, EXPIRED
+  const [live, setLive] = useState(null); // null=loading, true=live backend, false=demo fallback
 
   const fetchSignals = async () => {
     try {
-      const response = await axios.get('http://localhost:8080/api/v1/signals');
-      if (response.data && response.data.length > 0) {
-        setSignals(response.data);
-      }
+      const response = await api.get('/api/v1/signals');
+      setSignals(response.data || []); // trust backend even when empty (genuine "no signals yet")
+      setLive(true);
     } catch (e) {
       console.warn("Backend down, showing simulated option signals.", e.message);
+      setLive(false); // keep mock data already in state
     }
   };
 
   useEffect(() => {
-    fetchSignals();
-    const interval = setInterval(fetchSignals, 10000); // refresh every 10s
-    return () => clearInterval(interval);
+    fetchSignals(); // initial paint via REST
+    // Live updates pushed over WebSocket — no more polling.
+    const unsub = subscribe('/topic/signals', (data) => {
+      setSignals(data || []);
+      setLive(true);
+    });
+    return unsub;
   }, []);
 
   const getStatusColor = (status) => {
@@ -90,9 +96,15 @@ const AiSignals = () => {
 
   return (
     <Box sx={{ flexGrow: 1 }}>
-      <Typography variant="h4" sx={{ fontFamily: 'Outfit, sans-serif', fontWeight: 700, mb: 3 }}>
-        AI Signal Engine
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3, flexWrap: 'wrap' }}>
+        <Typography variant="h4" sx={{ fontFamily: 'Outfit, sans-serif', fontWeight: 700 }}>
+          AI Signal Engine
+        </Typography>
+        {live === false && (
+          <Chip label="Demo data — backend unreachable" size="small"
+            sx={{ bgcolor: 'rgba(255,179,0,0.12)', color: '#ffb300', border: '1px solid rgba(255,179,0,0.3)', fontWeight: 600 }} />
+        )}
+      </Box>
 
       {/* Tabs / Filters */}
       <Box sx={{ display: 'flex', gap: 2, mb: 4 }}>
@@ -116,6 +128,14 @@ const AiSignals = () => {
           </Button>
         ))}
       </Box>
+
+      {/* Loading / empty states */}
+      {live === null && (
+        <Box sx={{ display: 'flex', justifyContent: 'center', p: 6 }}><CircularProgress /></Box>
+      )}
+      {live === true && filteredSignals.length === 0 && (
+        <Alert severity="info">No {activeTab !== 'ALL' ? activeTab.toLowerCase() + ' ' : ''}signals yet. New signals appear here as the engine generates them.</Alert>
+      )}
 
       {/* Signals Grid */}
       <Grid container spacing={3}>

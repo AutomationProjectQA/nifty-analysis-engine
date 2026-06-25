@@ -2,19 +2,16 @@ package com.nifty.analysis.service;
 
 import com.nifty.analysis.collector.client.impl.AngelOneDataClient;
 import com.nifty.analysis.notification.TelegramBotService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class OrderExecutionService {
 
@@ -24,16 +21,36 @@ public class OrderExecutionService {
     @Value("${nifty.order-execution.lot-size:65}")
     private int lotSize;
 
-    @Value("${nifty.order-execution.risk-per-trade-percent:100.0}")
-    private double riskPerTradePercent;
+    // Percent of available wallet capital allocated to each order.
+    @Value("${nifty.risk.capital-per-order-percent:20.0}")
+    private double capitalPerOrderPercent;
 
+    @Value("${nifty.risk.target-profit-percent:2.0}")
+    private double targetProfitPercent;
+
+    @Value("${nifty.risk.stop-loss-percent:40.0}")
+    private double stopLossPercent;
+
+    // Null when the provider is not "angelone" (e.g. simulated mode) — no broker client.
     private final AngelOneDataClient angelOneDataClient;
     private final WebClient.Builder webClientBuilder;
     private final TelegramBotService telegramBotService;
 
+    public OrderExecutionService(@Nullable AngelOneDataClient angelOneDataClient,
+                                 WebClient.Builder webClientBuilder,
+                                 TelegramBotService telegramBotService) {
+        this.angelOneDataClient = angelOneDataClient;
+        this.webClientBuilder = webClientBuilder;
+        this.telegramBotService = telegramBotService;
+    }
+
     public void executeOrder(String signalType, int strike, double prevSpot) {
         if (!enabled) {
             log.info("Order execution is disabled. Skipping live order placement.");
+            return;
+        }
+        if (angelOneDataClient == null) {
+            log.info("No broker client available (simulated mode). Skipping order placement.");
             return;
         }
 
@@ -61,8 +78,8 @@ public class OrderExecutionService {
         double walletBalance = fetchWalletBalance();
         log.info("Fetched wallet balance: {} INR", walletBalance);
 
-        // Calculate lots and quantity based on 100% allocation
-        double allocatedCapital = walletBalance * (riskPerTradePercent / 100.0);
+        // Calculate lots and quantity based on the configured per-order allocation
+        double allocatedCapital = walletBalance * (capitalPerOrderPercent / 100.0);
         int lots = (int) Math.floor(allocatedCapital / (entryPremium * lotSize));
         int quantity = lots * lotSize;
 
@@ -75,17 +92,17 @@ public class OrderExecutionService {
             return;
         }
 
-        // Target value is exactly 2% of buying option price (rounded to nearest 0.05
-        // tick size)
-        double rawTargetPoints = entryPremium * 0.02;
+        // Target value is the configured profit percent of the option price
+        // (rounded to nearest 0.05 tick size)
+        double rawTargetPoints = entryPremium * (targetProfitPercent / 100.0);
         double targetPoints = Math.round(rawTargetPoints * 20.0) / 20.0;
         if (targetPoints < 0.05) {
             targetPoints = 0.05;
         }
 
-        // Symmetrical stop-loss at 20% (rounded to nearest 0.05 tick size)
-        double rawStopLossPoints = entryPremium * 0.40;
-        double stopLossPoints = Math.round(rawStopLossPoints * 40.0) / 40.0;
+        // Stop-loss at the configured percent of the option price (rounded to nearest 0.05 tick)
+        double rawStopLossPoints = entryPremium * (stopLossPercent / 100.0);
+        double stopLossPoints = Math.round(rawStopLossPoints * 20.0) / 20.0;
         if (stopLossPoints < 0.05) {
             stopLossPoints = 0.05;
         }
@@ -179,7 +196,28 @@ public class OrderExecutionService {
         }
     }
 
+    /**
+     * Computes the lot-aligned quantity for an order given the entry premium, using the
+     * configured per-order capital allocation and the (real or simulated) wallet balance.
+     * Returns at least one lot so that tracked P&L is never zero.
+     */
+    public int calculateQuantity(double entryPremium) {
+        if (entryPremium <= 0) {
+            return lotSize;
+        }
+        double walletBalance = fetchWalletBalance();
+        double allocatedCapital = walletBalance * (capitalPerOrderPercent / 100.0);
+        int lots = (int) Math.floor(allocatedCapital / (entryPremium * lotSize));
+        if (lots < 1) {
+            lots = 1;
+        }
+        return lots * lotSize;
+    }
+
     private double fetchWalletBalance() {
+        if (angelOneDataClient == null) {
+            return 50000.0; // simulated mode — no broker session
+        }
         String jwtToken = angelOneDataClient.getJwtToken();
         if (jwtToken == null || "SIMULATED_JWT_TOKEN".equals(jwtToken)) {
             return 50000.0; // Simulated wallet balance

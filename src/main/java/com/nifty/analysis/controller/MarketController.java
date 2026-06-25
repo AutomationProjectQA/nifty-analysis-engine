@@ -2,10 +2,8 @@ package com.nifty.analysis.controller;
 
 import com.nifty.analysis.entity.MarketSnapshot;
 import com.nifty.analysis.entity.OptionSnapshot;
-import com.nifty.analysis.notification.TelegramBotService;
 import com.nifty.analysis.repository.MarketSnapshotRepository;
 import com.nifty.analysis.repository.OptionSnapshotRepository;
-import com.nifty.analysis.service.LlmService;
 import com.nifty.analysis.service.MarketCollectorService;
 import com.nifty.analysis.service.RedisService;
 import lombok.RequiredArgsConstructor;
@@ -18,7 +16,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1")
@@ -52,13 +49,13 @@ public class MarketController {
         if (!cached.isEmpty()) {
             return ResponseEntity.ok(cached);
         }
-        
+
         LocalDateTime latestTime = optionSnapshotRepository.findLatestSnapshotTime();
         if (latestTime != null) {
             List<OptionSnapshot> dbList = optionSnapshotRepository.findBySnapshotTime(latestTime);
             return ResponseEntity.ok(dbList);
         }
-        
+
         return ResponseEntity.notFound().build();
     }
 }

@@ -7,13 +7,16 @@ import com.nifty.analysis.entity.MarketSnapshot;
 import com.nifty.analysis.entity.OptionSnapshot;
 import com.nifty.analysis.entity.SignalExplanation;
 import com.nifty.analysis.entity.TradeSignal;
+import com.nifty.analysis.repository.MarketSnapshotRepository;
 import com.nifty.analysis.repository.OptionSnapshotRepository;
 import com.nifty.analysis.repository.SignalExplanationRepository;
 import com.nifty.analysis.repository.TradeSignalRepository;
 import com.nifty.analysis.notification.TelegramBotService;
 import com.nifty.analysis.service.LlmService;
 import com.nifty.analysis.service.OnnxModelService;
+import com.nifty.analysis.service.OptionPricingService;
 import com.nifty.analysis.service.OrderExecutionService;
+import com.nifty.analysis.service.RiskGuardService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -33,13 +36,31 @@ public class DecisionAgent {
     @Value("${nifty.gating-threshold:80.0}")
     private double gatingThreshold;
 
+    // Weight given to the ONNX model when blending with the rule-based agent score
+    // (0.0 = ignore the model entirely, 1.0 = use the model only).
+    @Value("${nifty.model-weight:0.4}")
+    private double modelWeight;
+
+    // Minimum number of stored market snapshots before the ONNX model is trusted.
+    // Below this, the model's features are mostly cold-start fallbacks, so we rely
+    // on the rule-based agent score instead.
+    @Value("${nifty.model-min-history:50}")
+    private long modelMinHistory;
+
+    @Value("${nifty.risk.target-profit-percent:2.0}")
+    private double targetProfitPercent;
+
+    @Value("${nifty.risk.stop-loss-percent:40.0}")
+    private double stopLossPercent;
+
     private final ConfidenceEngine confidenceEngine;
     private final CriticAgent criticAgent;
     private final TechnicalAgent technicalAgent;
     private final OptionsAgent optionsAgent;
     private final SentimentAgent sentimentAgent;
-    
+
     private final MarketRegimeAgent marketRegimeAgent;
+    private final MarketSnapshotRepository marketSnapshotRepository;
     private final TradeSignalRepository tradeSignalRepository;
     private final SignalExplanationRepository signalExplanationRepository;
     private final OptionSnapshotRepository optionSnapshotRepository;
@@ -47,11 +68,20 @@ public class DecisionAgent {
     private final LlmService llmService;
     private final OrderExecutionService orderExecutionService;
     private final OnnxModelService onnxModelService;
+    private final RiskGuardService riskGuardService;
+    private final OptionPricingService optionPricingService;
 
     @Transactional
     public void evaluateMarketForSignals(MarketSnapshot latest, Double prevSpot) {
         log.info("Decision Agent executing trade signals search...");
-        
+
+        // 0. Risk guard: honour the kill switch and daily limits before opening any new trade.
+        RiskGuardService.RiskCheck riskCheck = riskGuardService.canOpenNewTrade();
+        if (!riskCheck.allowed()) {
+            log.info("Risk guard blocked new trade: {}", riskCheck.reason());
+            return;
+        }
+
         // 1. Fetch Option Snapshots to retrieve active option chain
         LocalDateTime latestOptionTime = optionSnapshotRepository.findLatestSnapshotTime();
         if (latestOptionTime == null) {
@@ -96,9 +126,9 @@ public class DecisionAgent {
             return;
         }
 
-        // 3. Compute raw confidence using ONNX Machine Learning Model
+        // 3. Compute ONNX model probability (direction-aware)
         TechnicalAgent.TechnicalFeatures features = technicalAgent.getFeatures(latest);
-        double modelRawConfidence = onnxModelService.predictBullishProbability(
+        double modelBullishProb = onnxModelService.predictBullishProbability(
                 features.rsi(),
                 features.spotToEma20(),
                 features.ema20ToEma50(),
@@ -108,11 +138,32 @@ public class DecisionAgent {
                 features.macdHist(),
                 features.volumeRatio()
         );
-        double rawConfidence = isBullish ? modelRawConfidence : 100.0 - modelRawConfidence;
-        log.info("ONNX ML Model raw confidence calculated: {}% (Direction: {})", rawConfidence, isBullish ? "BULLISH" : "BEARISH");
+        double modelConfidence = isBullish ? modelBullishProb : 100.0 - modelBullishProb;
 
-        // Compute legacy factor scores for database logging and LLM summaries
+        // Compute the rule-based multi-agent weighted confidence (direction-aware)
         ConfidenceEngine.RawConfidenceResult rawResult = confidenceEngine.calculateRawConfidence(latest, optionChainDtos, spotChange, isBullish);
+        double agentConfidence = rawResult.rawConfidence();
+
+        // Blend the ONNX model with the multi-agent score. The model is only trusted
+        // once it is loaded AND enough history exists for its features to be meaningful.
+        // Otherwise we fall back to the rule-based agent score to avoid the cold-start
+        // problem where the model returns a flat ~50% and blocks every single trade.
+        long snapshotCount = marketSnapshotRepository.count();
+        boolean modelReady = onnxModelService.isModelLoaded() && snapshotCount >= modelMinHistory;
+        double rawConfidence;
+        if (modelReady) {
+            rawConfidence = (modelWeight * modelConfidence) + ((1.0 - modelWeight) * agentConfidence);
+            log.info("Confidence blend -> ONNX={}% (w={}), Agent={}% => Raw={}% (Direction: {})",
+                    Math.round(modelConfidence * 100.0) / 100.0, modelWeight,
+                    Math.round(agentConfidence * 100.0) / 100.0,
+                    Math.round(rawConfidence * 100.0) / 100.0, isBullish ? "BULLISH" : "BEARISH");
+        } else {
+            rawConfidence = agentConfidence;
+            log.info("ONNX model not ready (loaded={}, snapshots={}/{}). Using rule-based agent confidence: {}% (Direction: {})",
+                    onnxModelService.isModelLoaded(), snapshotCount, modelMinHistory,
+                    Math.round(agentConfidence * 100.0) / 100.0, isBullish ? "BULLISH" : "BEARISH");
+        }
+        rawConfidence = Math.round(rawConfidence * 100.0) / 100.0;
 
         // 4. Critic Agent invalidation checks
         CriticAgent.CriticResult criticResult = criticAgent.evaluateAndApplyPenalties(
@@ -128,17 +179,23 @@ public class DecisionAgent {
             return;
         }
 
-        // 6. Generate pricing levels (simulated option premium: base of 150 points)
-        double entry = 150.0;
-        double stopLoss = entry - 15.0;  // 15 point SL
-        double target1 = entry + 15.0;   // Target 1 (1:1 RR)
-        double target2 = entry + 30.0;   // Target 2 (1:2 RR)
+        // 6. Generate pricing levels from the real option premium (LTP).
+        double entry = optionPricingService.getOptionLtp(signalType, atmStrike);
+        if (entry <= 0) {
+            entry = 150.0; // fallback when live LTP is unavailable (simulation / no broker session)
+            log.info("Live option LTP unavailable for {} {}. Using fallback entry premium {}.", signalType, atmStrike, entry);
+        }
+        double target1 = round2(entry * (1.0 + targetProfitPercent / 200.0)); // mid-point (half the target)
+        double target2 = round2(entry * (1.0 + targetProfitPercent / 100.0)); // primary profit target (e.g. +2%)
+        double stopLoss = round2(entry * (1.0 - stopLossPercent / 100.0));
+        int quantity = orderExecutionService.calculateQuantity(entry);
 
         TradeSignal signal = new TradeSignal();
         signal.setSignalTime(LocalDateTime.now());
         signal.setSignalType(signalType);
         signal.setStrike(atmStrike);
-        signal.setEntry(entry);
+        signal.setEntry(round2(entry));
+        signal.setQuantity(quantity);
         signal.setStopLoss(stopLoss);
         signal.setTarget1(target1);
         signal.setTarget2(target2);
@@ -149,7 +206,23 @@ public class DecisionAgent {
 
         // 7. Save explanation factors
         List<SignalExplanation> explanations = new ArrayList<>();
-        
+
+        // Decision provenance: capture how the final confidence was derived so every
+        // signal is fully auditable (ONNX vs rule-based agent vs blend vs final).
+        explanations.add(explanation("Model_ONNX", round2(modelConfidence),
+                "ONNX model directional confidence" + (modelReady ? "" : " (NOT used — model not ready)")));
+        explanations.add(explanation("Agent_Weighted", round2(agentConfidence),
+                "Rule-based multi-agent weighted confidence"));
+        explanations.add(explanation("Blended_Raw", rawConfidence,
+                modelReady
+                        ? String.format("Blend: %.2f*ONNX + %.2f*Agent", modelWeight, 1.0 - modelWeight)
+                        : "Agent-only (ONNX not ready)"));
+        explanations.add(explanation("Final_Confidence", round2(finalConfidence),
+                String.format("After critic penalties; gating threshold = %.1f%%", gatingThreshold)));
+        for (SignalExplanation e : explanations) {
+            e.setSignal(signal);
+        }
+
         // Save raw weight components
         for (Map.Entry<String, Double> entryScore : rawResult.factorScores().entrySet()) {
             SignalExplanation exp = new SignalExplanation();
@@ -203,5 +276,17 @@ public class DecisionAgent {
 
         // 9. Execute Order via Angel One
         orderExecutionService.executeOrder(signalType, atmStrike, spotPrice);
+    }
+
+    private static double round2(double value) {
+        return Math.round(value * 100.0) / 100.0;
+    }
+
+    private static SignalExplanation explanation(String factor, double score, String comment) {
+        SignalExplanation exp = new SignalExplanation();
+        exp.setFactor(factor);
+        exp.setScore(score);
+        exp.setComment(comment);
+        return exp;
     }
 }

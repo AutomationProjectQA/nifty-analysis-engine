@@ -23,6 +23,8 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import org.springframework.test.util.ReflectionTestUtils;
+
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -54,11 +56,15 @@ class MarketCollectorServiceTest {
     @Mock
     private OptionsIndicatorService optionsIndicatorService;
     @Mock
+    private OptionPricingService optionPricingService;
+    @Mock
     private DecisionAgent decisionAgent;
     @Mock
     private TelegramBotService telegramBotService;
     @Mock
     private LlmService llmService;
+    @Mock
+    private MarketStreamPublisher marketStreamPublisher;
 
     private MarketCollectorService marketCollectorService;
 
@@ -80,10 +86,13 @@ class MarketCollectorServiceTest {
                 redisService,
                 technicalIndicatorService,
                 optionsIndicatorService,
+                optionPricingService,
                 decisionAgent,
                 telegramBotService,
-                llmService
+                llmService,
+                marketStreamPublisher
         );
+        ReflectionTestUtils.setField(marketCollectorService, "lotSize", 65);
     }
 
     @Test

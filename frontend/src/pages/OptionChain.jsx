@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Box, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Typography, Card, CardContent, Chip } from '@mui/material';
 import Grid from '@mui/material/Grid';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import axios from 'axios';
+import api from '../api/client';
+import { subscribe } from '../api/marketStream';
 
 import AdSenseSlot from '../components/AdSenseSlot';
 
@@ -22,27 +23,52 @@ const mockOptionChain = [
 const OptionChain = () => {
   const [optionChain, setOptionChain] = useState(mockOptionChain);
   const [spotPrice, setSpotPrice] = useState(23510.50);
+  const [vwap, setVwap] = useState(null);
+  const [live, setLive] = useState(null); // null=loading, true=live, false=demo fallback
 
   const fetchOptionData = async () => {
     try {
-      const response = await axios.get('http://localhost:8080/api/v1/options/latest');
+      const response = await api.get('/api/v1/options/latest');
       if (response.data && response.data.length > 0) {
         setOptionChain(response.data);
       }
-      
-      const spotRes = await axios.get('http://localhost:8080/api/v1/market/latest');
+
+      const spotRes = await api.get('/api/v1/market/latest');
       if (spotRes.data) {
         setSpotPrice(spotRes.data.niftySpot);
+        setVwap(spotRes.data.vwap ?? null);
       }
+      setLive(true);
     } catch (e) {
       console.warn("Backend down, showing simulated option chain data.", e.message);
+      setLive(false);
     }
   };
 
   useEffect(() => {
-    fetchOptionData();
-    const interval = setInterval(fetchOptionData, 10000); // refresh every 10s
-    return () => clearInterval(interval);
+    fetchOptionData(); // initial paint via REST
+    // Live updates pushed over WebSocket — no more polling.
+    const u1 = subscribe('/topic/options', (data) => {
+      if (data && data.length > 0) setOptionChain(data);
+      setLive(true);
+    });
+    const u2 = subscribe('/topic/market', (m) => {
+      if (m) {
+        setSpotPrice(m.niftySpot);
+        setVwap(m.vwap ?? null);
+      }
+    });
+    // Live per-strike OI ticks — merge onto the chain (keep IV/PCR/maxPain from the snapshot).
+    const u3 = subscribe('/topic/optionsTick', (ticks) => {
+      if (!ticks || !ticks.length) return;
+      const byStrike = new Map(ticks.map((t) => [t.strikePrice, t]));
+      setOptionChain((prev) => prev.map((row) => {
+        const t = byStrike.get(row.strikePrice);
+        return t ? { ...row, ceOi: t.ceOi, peOi: t.peOi } : row;
+      }));
+      setLive(true);
+    });
+    return () => { u1(); u2(); u3(); };
   }, []);
 
   // Compute ATM Strike closest to spot
@@ -56,7 +82,11 @@ const OptionChain = () => {
     totalPuts += s.peOi || 0;
   });
   const overallPcr = totalCalls > 0 ? (totalPuts / totalCalls).toFixed(2) : '0.00';
-  const maxPainVal = optionChain[0]?.maxPain || 23500;
+  // Backend stamps the same computed max-pain on every strike; find the first non-null.
+  const maxPainVal = optionChain.find((s) => s.maxPain != null)?.maxPain ?? atmStrike;
+
+  // Real intraday direction of the underlying: spot vs day VWAP (fallback: assume up).
+  const underlyingUp = vwap != null ? spotPrice > vwap : true;
 
   // Format Recharts data
   const chartData = optionChain.map(s => ({
@@ -86,9 +116,15 @@ const OptionChain = () => {
 
   return (
     <Box sx={{ flexGrow: 1 }}>
-      <Typography variant="h4" sx={{ fontFamily: 'Outfit, sans-serif', fontWeight: 700, mb: 3 }}>
-        Option Chain Analytics
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3, flexWrap: 'wrap' }}>
+        <Typography variant="h4" sx={{ fontFamily: 'Outfit, sans-serif', fontWeight: 700 }}>
+          Option Chain Analytics
+        </Typography>
+        {live === false && (
+          <Chip label="Demo data — backend unreachable" size="small"
+            sx={{ bgcolor: 'rgba(255,179,0,0.12)', color: '#ffb300', border: '1px solid rgba(255,179,0,0.3)', fontWeight: 600 }} />
+        )}
+      </Box>
 
       {/* Summary Cards */}
       <Grid container spacing={3} sx={{ mb: 4 }}>
@@ -175,10 +211,9 @@ const OptionChain = () => {
             {optionChain.map((row) => {
               const isAtm = row.strikePrice === atmStrike;
               
-              // Call direction approximation (Spot change as proxy for option price)
-              const ceStyle = getBuildUpStyle(true, row.ceOiChange || 0, spotPrice - 23450.0);
-              // Put direction approximation
-              const peStyle = getBuildUpStyle(false, row.peOiChange || 0, spotPrice - 23450.0);
+              // Calls gain when the underlying rises; puts gain when it falls.
+              const ceStyle = getBuildUpStyle(true, row.ceOiChange || 0, underlyingUp ? 1 : -1);
+              const peStyle = getBuildUpStyle(false, row.peOiChange || 0, underlyingUp ? -1 : 1);
 
               return (
                 <TableRow 

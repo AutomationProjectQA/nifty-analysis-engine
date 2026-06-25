@@ -59,10 +59,66 @@ logging:
 # Nifty Analysis Engine Properties
 nifty:
   gating-threshold: 60.0
+
+  # Outbound HTTP timeouts (Angel One, Gemini, Yahoo) — a hung API can't block threads.
+  http:
+    connect-timeout-ms: 10000
+    timeout-ms: 10000
+
+  # Weight given to the ONNX model when blending its score with the rule-based
+  # multi-agent confidence (0.0 = ignore model, 1.0 = model only).
+  model-weight: 0.4
+  # Minimum stored market snapshots before the ONNX model is trusted. Below this
+  # the model runs on cold-start fallback features, so the agent score is used.
+  model-min-history: 50
+
+  regime:
+    # Sideways-detection sensitivity (fraction of ATR). Lower = fewer markets
+    # flagged sideways. Original hardcoded value was 0.25 (too aggressive).
+    sideways-atr-factor: 0.10
+
+  # ============================================================
+  # RISK MANAGEMENT — tune these to control capital usage & daily limits.
+  # Changing any value here takes effect on the next restart.
+  # ============================================================
+  risk:
+    # Global kill switch. false = stop opening ANY new trades.
+    # (Open trades are still managed/resolved as usual.)
+    trading-enabled: true
+
+    # Percent of available wallet capital allocated to EACH order.
+    # e.g. 20.0 = use 20% of the wallet per trade.
+    capital-per-order-percent: 20.0
+
+    # Profit target as a percent of the entry premium (the "take 2% profit" goal).
+    target-profit-percent: 2.0
+    # Stop-loss as a percent of the entry premium.
+    stop-loss-percent: 40.0
+
+    # Maximum number of NEW trades to open per trading day.
+    max-trades-per-day: 5
+
+    # Halt new trades for the day once cumulative realised loss reaches this.
+    # Unit matches recorded trade P&L (TradeResult.profitLoss).
+    max-loss-per-day: 1000.0
+
+  # Backtest execution realism — model costs so reported P&L isn't optimistic.
+  backtest:
+    entry-premium: 150.0        # modeled ATM premium (historical premiums aren't stored)
+    brokerage-per-trade: 40.0   # round-trip brokerage + fees per trade (INR)
+    slippage-percent: 0.5       # slippage as % of premium, applied on entry and exit
+    theta-decay-per-hour: 0.5   # premium points lost per hour held (time decay)
+
   order-execution:
     enabled: true
     lot-size: 65
-    risk-per-trade-percent: 100.0
+
+  # Real-time tick streaming via Angel One SmartWebSocketV2 (spot/future/VIX).
+  # Requires provider: angelone and a valid live session. Default off — the REST
+  # collector still runs; this only adds live ticks on top.
+  stream:
+    enabled: false
+    url: "wss://smartapisocket.angelone.in/smart-stream"
 
   collector:
     # Ingestion provider: simulated or angelone
@@ -78,16 +134,16 @@ nifty:
   # Telegram Notification Configuration
   telegram:
     enabled: true
-    bot-token: "8696753335:AAGWsEhCExcb843_37f6W__xYl20P2PoLHM"
-    chat-id: "1356393233"
+    bot-token: ${TELEGRAM_BOT_TOKEN}
+    chat-id: ${TELEGRAM_CHAT_ID}
 
   # AI Decision & Explanation Service Configuration
   ai:
-    gemini-api-key: "AQ.Ab8RN6IwGCY3S5RZ6Q_0cmW8uRj48sa0eN8yvrgP8BA_Ere16Q"
+    gemini-api-key: ${GEMINI_API_KEY}
 
   # Angel One SmartAPI Client Configuration
   angelone:
-    api-key: "ITN5sUnv"
-    client-code: "M213870"
-    password: "1210"
-    totp-key: "3HC74EZFONVIKT2SPQT4WFQLUQ"
+    api-key: ${ANGEL_ONE_API_KEY}
+    client-code: ${ANGEL_ONE_CLIENT_CODE}
+    password: ${ANGEL_ONE_PASSWORD}
+    totp-key: ${ANGEL_ONE_TOTP_KEY}

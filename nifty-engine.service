@@ -1,0 +1,18 @@
+[Unit]
+Description=Nifty Option Analysis Engine Backend
+After=syslog.target network.target postgresql.service redis-server.service
+
+[Service]
+User=meet
+Type=simple
+WorkingDirectory=/var/nifty
+# Reads secrets/config (TELEGRAM_BOT_TOKEN, GEMINI_API_KEY, ANGEL_ONE_*, DB, etc.)
+# pushed by the deploy script. Without this the app fails to resolve ${...} placeholders.
+EnvironmentFile=/etc/nifty/nifty.env
+ExecStart=/usr/bin/java -jar /var/nifty/nifty-engine.jar
+SuccessExitStatus=143
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

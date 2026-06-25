@@ -31,6 +31,9 @@ public class TradeSignal {
     @Column(name = "entry", nullable = false)
     private Double entry;
 
+    @Column(name = "quantity")
+    private Integer quantity; // executed quantity (lots * lot size); used for INR P&L
+
     @Column(name = "stop_loss", nullable = false)
     private Double stopLoss;
 

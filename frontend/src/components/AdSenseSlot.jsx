@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import PropTypes from 'prop-types';
 import { Box, Typography } from '@mui/material';
 
 const AdSenseSlot = ({ adSlot, adFormat = 'auto', responsive = 'true', style = { display: 'block', width: '100%' } }) => {
@@ -69,6 +70,13 @@ const AdSenseSlot = ({ adSlot, adFormat = 'auto', responsive = 'true', style = {
       />
     </Box>
   );
+};
+
+AdSenseSlot.propTypes = {
+  adSlot: PropTypes.string,
+  adFormat: PropTypes.string,
+  responsive: PropTypes.string,
+  style: PropTypes.object,
 };
 
 export default AdSenseSlot;

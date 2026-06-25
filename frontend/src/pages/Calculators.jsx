@@ -32,9 +32,9 @@ const Calculators = () => {
   const [orderCount, setOrderCount] = useState(4); // Buy + Sell count
   const FlatBrokerage = 20.0; // flat 20 rs per executed order
 
-  // Option calculations
+  // Option calculations (guard against a cleared/zero premium -> avoid NaN/Infinity)
   const optProfitValue = (optExit - optPremium) * optLots * 65;
-  const optRoi = ((optExit - optPremium) / optPremium) * 100;
+  const optRoi = optPremium > 0 ? ((optExit - optPremium) / optPremium) * 100 : 0;
 
   // Position sizing
   const maxRiskCash = (capTotal * capRiskPct) / 100;

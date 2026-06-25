@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Card, CardContent, Typography, LinearProgress, Alert, Button } from '@mui/material';
+import { Box, Card, CardContent, Typography, LinearProgress, Alert, Button, Chip } from '@mui/material';
 import Grid from '@mui/material/Grid';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import TrendingDownIcon from '@mui/icons-material/TrendingDown';
 import SwapCallsIcon from '@mui/icons-material/SwapCalls';
-import axios from 'axios';
+import api from '../api/client';
+import { subscribe } from '../api/marketStream';
 
 import TradingViewChart from '../components/TradingViewChart';
 
@@ -19,29 +20,61 @@ const Dashboard = () => {
     ema50: 23478.45
   });
   
-  const [error, setError] = useState(null);
+  const [live, setLive] = useState(null); // null=loading, true=live, false=demo fallback
 
   const fetchMarketData = async () => {
     try {
-      const response = await axios.get('http://localhost:8080/api/v1/market/latest');
+      const response = await api.get('/api/v1/market/latest');
       if (response.data) {
         setMarketData(response.data);
-        setError(null);
+        setLive(true);
       }
     } catch (e) {
-      // Keep using default mock values if connection fails, but log error
+      // Keep using default mock values if connection fails, but flag as demo
       console.warn("Backend down, displaying live simulated cues.", e.message);
+      setLive(false);
     }
   };
 
   useEffect(() => {
-    fetchMarketData();
-    const interval = setInterval(fetchMarketData, 5000);
-    return () => clearInterval(interval);
+    fetchMarketData(); // initial paint via REST
+    // Full snapshot (incl. RSI/VWAP/EMA) on each collection cycle.
+    const unsubSnap = subscribe('/topic/market', (data) => {
+      if (data) {
+        setMarketData(data);
+        setLive(true);
+      }
+    });
+    // Real-time ticks (spot/future/VIX) between cycles — merged onto the latest snapshot.
+    const unsubTick = subscribe('/topic/tick', (t) => {
+      if (t) {
+        setMarketData((prev) => ({
+          ...prev,
+          niftySpot: t.niftySpot,
+          niftyFuture: t.niftyFuture,
+          indiaVix: t.indiaVix,
+        }));
+        setLive(true);
+      }
+    });
+    return () => { unsubSnap(); unsubTick(); };
   }, []);
 
   const spotFutureSpread = marketData.niftyFuture - marketData.niftySpot;
   const spotVwapDistance = marketData.niftySpot - marketData.vwap;
+  const spotVwapPct = marketData.vwap ? (spotVwapDistance / marketData.vwap) * 100 : 0;
+  const spotAboveVwap = spotVwapDistance >= 0;
+
+  // Volatility regime from the live VIX level (no fabricated "change").
+  let vixLabel = 'Moderate volatility';
+  let vixColor = '#ffb300';
+  if (marketData.indiaVix < 13) {
+    vixLabel = 'Low volatility';
+    vixColor = '#26a69a';
+  } else if (marketData.indiaVix > 18) {
+    vixLabel = 'High volatility';
+    vixColor = '#ef5350';
+  }
   
   // Calculate dynamic Pivot support/resistance bounds based on Spot
   const pivotPoint = marketData.niftySpot;
@@ -71,7 +104,13 @@ const Dashboard = () => {
         variant="h4" 
         sx={{ fontFamily: 'Outfit, sans-serif', fontWeight: 700, mb: 3, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
       >
-        Market Snapshot
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          Market Snapshot
+          {live === false && (
+            <Chip label="Demo data" size="small"
+              sx={{ bgcolor: 'rgba(255,179,0,0.12)', color: '#ffb300', border: '1px solid rgba(255,179,0,0.3)', fontWeight: 600 }} />
+          )}
+        </Box>
         <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 500 }}>
           Refreshes every 5s
         </Typography>
@@ -88,9 +127,11 @@ const Dashboard = () => {
               <Typography variant="h4" sx={{ fontWeight: 700, mt: 1, fontFamily: 'Outfit, sans-serif' }}>
                 {marketData.niftySpot.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, gap: 0.5, color: '#26a69a' }}>
-                <TrendingUpIcon fontSize="small" />
-                <Typography variant="body2" sx={{ fontWeight: 600 }}>+105.20 (+0.45%)</Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, gap: 0.5, color: spotAboveVwap ? '#26a69a' : '#ef5350' }}>
+                {spotAboveVwap ? <TrendingUpIcon fontSize="small" /> : <TrendingDownIcon fontSize="small" />}
+                <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                  {spotAboveVwap ? '+' : ''}{spotVwapDistance.toFixed(2)} ({spotVwapPct.toFixed(2)}%) vs VWAP
+                </Typography>
               </Box>
             </CardContent>
           </Card>
@@ -119,9 +160,8 @@ const Dashboard = () => {
               <Typography variant="h4" sx={{ fontWeight: 700, mt: 1, fontFamily: 'Outfit, sans-serif' }}>
                 {marketData.indiaVix.toFixed(2)}
               </Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, gap: 0.5, color: '#ef5350' }}>
-                <TrendingDownIcon fontSize="small" />
-                <Typography variant="body2" sx={{ fontWeight: 600 }}>-0.25 (-1.83%)</Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, gap: 0.5, color: vixColor }}>
+                <Typography variant="body2" sx={{ fontWeight: 600 }}>{vixLabel}</Typography>
               </Box>
             </CardContent>
           </Card>

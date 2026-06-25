@@ -31,7 +31,7 @@ class OrderExecutionServiceTest {
         orderExecutionService = new OrderExecutionService(angelOneDataClient, webClientBuilder, telegramBotService);
         ReflectionTestUtils.setField(orderExecutionService, "enabled", true);
         ReflectionTestUtils.setField(orderExecutionService, "lotSize", 65);
-        ReflectionTestUtils.setField(orderExecutionService, "riskPerTradePercent", 100.0);
+        ReflectionTestUtils.setField(orderExecutionService, "capitalPerOrderPercent", 100.0);
     }
 
     @Test

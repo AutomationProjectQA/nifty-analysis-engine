@@ -16,7 +16,6 @@ import com.nifty.analysis.entity.TradeResult;
 import com.nifty.analysis.repository.TradeSignalRepository;
 import com.nifty.analysis.repository.TradeResultRepository;
 import com.nifty.analysis.notification.TelegramBotService;
-import com.nifty.analysis.service.LlmService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -34,40 +33,46 @@ public class MarketCollectorService {
 
     private final MarketDataClient marketDataClient;
     private final OptionChainClient optionChainClient;
-    
+
     private final MarketSnapshotRepository marketSnapshotRepository;
     private final OptionSnapshotRepository optionSnapshotRepository;
     private final MarketCandleRepository marketCandleRepository;
     private final TradeSignalRepository tradeSignalRepository;
     private final TradeResultRepository tradeResultRepository;
-    
+
     private final RedisService redisService;
     private final TechnicalIndicatorService technicalIndicatorService;
     private final OptionsIndicatorService optionsIndicatorService;
+    private final OptionPricingService optionPricingService;
     private final DecisionAgent decisionAgent;
     private final TelegramBotService telegramBotService;
     private final LlmService llmService;
+    private final MarketStreamPublisher marketStreamPublisher;
+
+    @org.springframework.beans.factory.annotation.Value("${nifty.order-execution.lot-size:65}")
+    private int lotSize;
 
     @Transactional
     public void collect() {
         log.info("Starting market and option chain data collection cycle...");
         try {
             LocalDateTime now = LocalDateTime.now();
-            
+
             // 1. Fetch & Store Market Snapshot
             MarketSnapshotDto marketData = marketDataClient.fetchMarketData();
-            
+
             // Query previous snapshot to retrieve last calculated EMA values
             Optional<MarketSnapshot> prevSnapshot = marketSnapshotRepository.findLatest();
             Double prevEma20 = prevSnapshot.map(MarketSnapshot::getEma20).orElse(null);
             Double prevEma50 = prevSnapshot.map(MarketSnapshot::getEma50).orElse(null);
-            
+
             // Calculate technical indicators
             double ema20 = technicalIndicatorService.calculateEma(marketData.niftySpot(), prevEma20, 20);
             double ema50 = technicalIndicatorService.calculateEma(marketData.niftySpot(), prevEma50, 50);
             double rsi = technicalIndicatorService.calculateRsi(marketData.niftySpot(), marketData.timestamp());
-            double vwap = technicalIndicatorService.calculateVwap(marketData.niftySpot(), marketData.volume(), marketData.timestamp());
-            
+            double vwap = technicalIndicatorService.calculateVwap(marketData.niftySpot(), marketData.volume(),
+                    marketData.timestamp());
+
             MarketSnapshot snapshot = new MarketSnapshot();
             snapshot.setSnapshotTime(marketData.timestamp());
             snapshot.setNiftySpot(marketData.niftySpot());
@@ -78,20 +83,21 @@ public class MarketCollectorService {
             snapshot.setEma50(ema50);
             snapshot.setRsi(rsi);
             snapshot.setVwap(vwap);
-            
+
             // Persist & Cache Market Snapshot
             marketSnapshotRepository.save(snapshot);
             redisService.saveLatestMarketSnapshot(snapshot);
-            log.info("Market Snapshot persisted: Spot={}, Future={}, VIX={}, EMA20={}, EMA50={}, RSI={}, VWAP={}", 
+            marketStreamPublisher.publishMarket(snapshot); // live push to the portal
+            log.info("Market Snapshot persisted: Spot={}, Future={}, VIX={}, EMA20={}, EMA50={}, RSI={}, VWAP={}",
                     snapshot.getNiftySpot(), snapshot.getNiftyFuture(), snapshot.getIndiaVix(),
                     snapshot.getEma20(), snapshot.getEma50(), snapshot.getRsi(), snapshot.getVwap());
 
             // 2. Fetch & Store Option Chain Snapshots
             List<OptionSnapshotDto> optionChainData = optionChainClient.fetchOptionChain();
-            
+
             // Calculate Max Pain for the current option chain
             double calculatedMaxPain = optionsIndicatorService.calculateMaxPain(optionChainData);
-            
+
             List<OptionSnapshot> optionSnapshots = optionChainData.stream().map(dto -> {
                 OptionSnapshot option = new OptionSnapshot();
                 option.setSnapshotTime(dto.timestamp());
@@ -107,10 +113,12 @@ public class MarketCollectorService {
                 option.setPeVolume(dto.peVolume());
                 return option;
             }).toList();
-            
+
             optionSnapshotRepository.saveAll(optionSnapshots);
             redisService.saveLatestOptionChain(optionSnapshots);
-            log.info("Option Chain snapshot persisted ({} strikes, Max Pain={})", optionSnapshots.size(), calculatedMaxPain);
+            marketStreamPublisher.publishOptions(optionSnapshots); // live push to the portal
+            log.info("Option Chain snapshot persisted ({} strikes, Max Pain={})", optionSnapshots.size(),
+                    calculatedMaxPain);
 
             // 3. Update Market Candles (5m, 15m, 30m, 60m Timeframes)
             updateCandle(marketData.niftySpot(), marketData.volume(), now, "5m");
@@ -119,10 +127,14 @@ public class MarketCollectorService {
             updateCandle(marketData.niftySpot(), marketData.volume(), now, "60m");
 
             // 4. Trigger Decision Agent signal evaluations
-            decisionAgent.evaluateMarketForSignals(snapshot, prevSnapshot.map(MarketSnapshot::getNiftySpot).orElse(null));
+            decisionAgent.evaluateMarketForSignals(snapshot,
+                    prevSnapshot.map(MarketSnapshot::getNiftySpot).orElse(null));
 
             // 5. Update and resolve active trade signals in real-time
             updateActiveTrades(snapshot);
+
+            // 6. Push the current signal set to the portal
+            marketStreamPublisher.publishSignals(tradeSignalRepository.findAllByOrderBySignalTimeDesc());
 
         } catch (Exception e) {
             log.error("Error during data collection cycle", e);
@@ -139,7 +151,7 @@ public class MarketCollectorService {
             minutes = 60;
         }
         LocalDateTime candleStart = roundToTimeframe(now, minutes);
-        
+
         // Find volume at the start of the timeframe
         double volumeBefore = 0.0;
         Optional<MarketSnapshot> prevSnap = marketSnapshotRepository.findLatestBefore(candleStart);
@@ -149,10 +161,10 @@ public class MarketCollectorService {
             }
         }
         double currentCandleVolume = Math.max(0.0, totalVolume - volumeBefore);
-        
+
         // Find existing candle for the timeframe and start time
         List<MarketCandle> existingCandles = marketCandleRepository.findLatestByTimeframe(timeframe, 1);
-        
+
         MarketCandle candle;
         if (!existingCandles.isEmpty() && existingCandles.getFirst().getTimestamp().equals(candleStart)) {
             candle = existingCandles.getFirst();
@@ -170,9 +182,9 @@ public class MarketCollectorService {
             candle.setVolume(currentCandleVolume);
             candle.setTimeframe(timeframe);
         }
-        
+
         marketCandleRepository.save(candle);
-        log.debug("Candle ({}) updated: Timestamp={}, Open={}, Close={}, Volume={}", 
+        log.debug("Candle ({}) updated: Timestamp={}, Open={}, Close={}, Volume={}",
                 timeframe, candle.getTimestamp(), candle.getOpen(), candle.getClose(), candle.getVolume());
     }
 
@@ -198,14 +210,18 @@ public class MarketCollectorService {
             double entrySpot = entrySnapshot.map(MarketSnapshot::getNiftySpot).orElse(spot);
 
             boolean isCall = "BUY_CE".equals(signal.getSignalType());
-            double currentOptionPrice;
-            if (isCall) {
-                currentOptionPrice = signal.getEntry() + (spot - entrySpot) * 0.5;
-            } else {
-                currentOptionPrice = signal.getEntry() + (entrySpot - spot) * 0.5;
-            }
 
+            // Prefer the real live option premium; fall back to a spot-delta approximation
+            // when a live price is unavailable (simulation / no broker session).
+            double currentOptionPrice = optionPricingService.getOptionLtp(signal.getSignalType(), signal.getStrike());
+            if (currentOptionPrice <= 0) {
+                currentOptionPrice = isCall
+                        ? signal.getEntry() + (spot - entrySpot) * 0.5
+                        : signal.getEntry() + (entrySpot - spot) * 0.5;
+            }
             currentOptionPrice = Math.round(currentOptionPrice * 100.0) / 100.0;
+
+            int quantity = signal.getQuantity() != null ? signal.getQuantity() : lotSize;
 
             if (currentOptionPrice <= signal.getStopLoss()) {
                 signal.setStatus("FAILED");
@@ -214,13 +230,15 @@ public class MarketCollectorService {
                 TradeResult result = new TradeResult();
                 result.setSignal(signal);
                 result.setOutcome("STOP_LOSS");
-                result.setProfitLoss(signal.getStopLoss() - signal.getEntry());
-                result.setHoldingTime(java.time.Duration.between(signal.getSignalTime(), latest.getSnapshotTime()).toSeconds());
+                result.setProfitLoss((signal.getStopLoss() - signal.getEntry()) * quantity); // INR
+                result.setHoldingTime(
+                        java.time.Duration.between(signal.getSignalTime(), latest.getSnapshotTime()).toSeconds());
                 result.setAccuracy(0.0);
                 tradeResultRepository.save(result);
 
                 // Asynchronously trigger post-mortem reflection for the failed trade
-                List<MarketSnapshot> context = marketSnapshotRepository.findBetween(signal.getSignalTime(), latest.getSnapshotTime());
+                List<MarketSnapshot> context = marketSnapshotRepository.findBetween(signal.getSignalTime(),
+                        latest.getSnapshotTime());
                 java.util.concurrent.CompletableFuture.runAsync(() -> {
                     try {
                         llmService.generatePostMortem(signal, context);
@@ -234,10 +252,11 @@ public class MarketCollectorService {
                         "*Entry Premium:* %.2f (Nifty Spot at Entry: %.2f)\n" +
                         "*Current Premium:* %.2f (Current Nifty Spot: %.2f)\n" +
                         "*Stop Loss:* %.2f\n" +
-                        "*P&L:* %.2f points\n" +
+                        "*P&L:* %.2f INR\n" +
                         "*Holding Time:* %d seconds",
                         signal.getSignalType(), signal.getStrike(), signal.getEntry(), entrySpot,
-                        currentOptionPrice, spot, signal.getStopLoss(), result.getProfitLoss(), result.getHoldingTime());
+                        currentOptionPrice, spot, signal.getStopLoss(), result.getProfitLoss(),
+                        result.getHoldingTime());
                 telegramBotService.sendMessage(msg);
                 log.info("Active trade resolved: SL hit for signal ID={}", signal.getId());
             } else if (currentOptionPrice >= signal.getTarget2()) {
@@ -247,8 +266,9 @@ public class MarketCollectorService {
                 TradeResult result = new TradeResult();
                 result.setSignal(signal);
                 result.setOutcome("TARGET2");
-                result.setProfitLoss(signal.getTarget2() - signal.getEntry());
-                result.setHoldingTime(java.time.Duration.between(signal.getSignalTime(), latest.getSnapshotTime()).toSeconds());
+                result.setProfitLoss((signal.getTarget2() - signal.getEntry()) * quantity); // INR
+                result.setHoldingTime(
+                        java.time.Duration.between(signal.getSignalTime(), latest.getSnapshotTime()).toSeconds());
                 result.setAccuracy(100.0);
                 tradeResultRepository.save(result);
 
@@ -257,7 +277,7 @@ public class MarketCollectorService {
                         "*Entry Premium:* %.2f (Nifty Spot at Entry: %.2f)\n" +
                         "*Current Premium:* %.2f (Current Nifty Spot: %.2f)\n" +
                         "*Target 2:* %.2f\n" +
-                        "*P&L:* +%.2f points\n" +
+                        "*P&L:* +%.2f INR\n" +
                         "*Holding Time:* %d seconds",
                         signal.getSignalType(), signal.getStrike(), signal.getEntry(), entrySpot,
                         currentOptionPrice, spot, signal.getTarget2(), result.getProfitLoss(), result.getHoldingTime());
@@ -290,8 +310,10 @@ public class MarketCollectorService {
 
         MarketSnapshot latest = todaySnapshots.get(todaySnapshots.size() - 1);
         double open = todaySnapshots.get(0).getNiftySpot();
-        double high = todaySnapshots.stream().mapToDouble(MarketSnapshot::getNiftySpot).max().orElse(latest.getNiftySpot());
-        double low = todaySnapshots.stream().mapToDouble(MarketSnapshot::getNiftySpot).min().orElse(latest.getNiftySpot());
+        double high = todaySnapshots.stream().mapToDouble(MarketSnapshot::getNiftySpot).max()
+                .orElse(latest.getNiftySpot());
+        double low = todaySnapshots.stream().mapToDouble(MarketSnapshot::getNiftySpot).min()
+                .orElse(latest.getNiftySpot());
 
         List<TradeSignal> activeTrades = tradeSignalRepository.findByStatus("ACTIVE");
         List<TradeSignal> todayTrades = tradeSignalRepository.findBySignalTimeAfter(todayStart);
@@ -302,8 +324,7 @@ public class MarketCollectorService {
         String aiSummary = llmService.generateMarketSummary(
                 latest.getNiftySpot(), open, high, low,
                 latest.getRsi(), latest.getVwap(), latest.getEma20(), latest.getEma50(),
-                activeTrades, resolvedTodayTrades
-        );
+                activeTrades, resolvedTodayTrades);
 
         StringBuilder sb = new StringBuilder();
         sb.append("📊 *NIFTY 30-MINUTE MARKET UPDATE* 📊\n\n");
@@ -315,7 +336,8 @@ public class MarketCollectorService {
 
         sb.append("📈 *Technical Indicators:*\n");
         sb.append(String.format("• *RSI (14):* `%.2f`\n", latest.getRsi() != null ? latest.getRsi() : 50.0));
-        sb.append(String.format("• *VWAP:* `%.2f`\n", latest.getVwap() != null ? latest.getVwap() : latest.getNiftySpot()));
+        sb.append(String.format("• *VWAP:* `%.2f`\n",
+                latest.getVwap() != null ? latest.getVwap() : latest.getNiftySpot()));
         sb.append(String.format("• *EMA 20:* `%.2f` | *EMA 50:* `%.2f`\n\n",
                 latest.getEma20() != null ? latest.getEma20() : latest.getNiftySpot(),
                 latest.getEma50() != null ? latest.getEma50() : latest.getNiftySpot()));
@@ -330,11 +352,12 @@ public class MarketCollectorService {
                 double entrySpot = entrySnapshot.map(MarketSnapshot::getNiftySpot).orElse(latest.getNiftySpot());
                 boolean isCall = "BUY_CE".equals(t.getSignalType());
                 double currentOptionPrice = isCall ? t.getEntry() + (latest.getNiftySpot() - entrySpot) * 0.5
-                                                   : t.getEntry() + (entrySpot - latest.getNiftySpot()) * 0.5;
+                        : t.getEntry() + (entrySpot - latest.getNiftySpot()) * 0.5;
                 currentOptionPrice = Math.round(currentOptionPrice * 100.0) / 100.0;
 
                 sb.append(String.format("  - %s Strike %d (Entry: %.2f, Current: %.2f, SL: %.2f, Target2: %.2f)\n",
-                        t.getSignalType(), t.getStrike(), t.getEntry(), currentOptionPrice, t.getStopLoss(), t.getTarget2()));
+                        t.getSignalType(), t.getStrike(), t.getEntry(), currentOptionPrice, t.getStopLoss(),
+                        t.getTarget2()));
             }
         }
 

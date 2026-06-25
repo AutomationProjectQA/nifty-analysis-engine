@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Card, CardContent, Typography, List, ListItem, ListItemIcon, ListItemText, Divider, CircularProgress, Chip } from '@mui/material';
+import { Box, Card, CardContent, Typography, List, ListItem, ListItemIcon, ListItemText, Divider, CircularProgress, Chip, Alert, Button } from '@mui/material';
+import Grid from '@mui/material/Grid';
 import NewspaperIcon from '@mui/icons-material/Newspaper';
 import ArrowRightIcon from '@mui/icons-material/ArrowRight';
 import ReactMarkdown from 'react-markdown';
-import axios from 'axios';
+import api from '../api/client';
 
 // Mock news items if backend is down
 const mockNews = [
@@ -24,18 +25,32 @@ const mockNews = [
 const NewsIntelligence = () => {
   const [newsList, setNewsList] = useState(mockNews);
   const [loading, setLoading] = useState(false);
+  const [live, setLive] = useState(null); // null=loading, true=live, false=demo fallback
 
   const fetchNews = async () => {
     setLoading(true);
     try {
-      const response = await axios.get('http://localhost:8080/api/v1/news/today');
-      if (response.data && response.data.length > 0) {
-        setNewsList(response.data);
-      }
+      const response = await api.get('/api/v1/news/today');
+      setNewsList(response.data || []); // trust backend even when empty (genuine "no news yet")
+      setLive(true);
     } catch (e) {
       console.warn("Backend offline, using local simulated news vlogs.", e.message);
+      setLive(false); // keep mock data already in state
     } finally {
       setLoading(false);
+    }
+  };
+
+  const [generating, setGenerating] = useState(false);
+  const generateNews = async () => {
+    setGenerating(true);
+    try {
+      await api.post('/api/v1/news/generate', null, { timeout: 60000 });
+      await fetchNews();
+    } catch (e) {
+      console.warn('News generation failed.', e.message);
+    } finally {
+      setGenerating(false);
     }
   };
 
@@ -45,15 +60,26 @@ const NewsIntelligence = () => {
 
   return (
     <Box sx={{ flexGrow: 1 }}>
-      <Typography variant="h4" sx={{ fontFamily: 'Outfit, sans-serif', fontWeight: 700, mb: 3, display: 'flex', alignItems: 'center', gap: 1 }}>
-        <NewspaperIcon sx={{ fontSize: 35, color: 'primary.main' }} />
-        Market News Intelligence
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3, flexWrap: 'wrap' }}>
+        <Typography variant="h4" sx={{ fontFamily: 'Outfit, sans-serif', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <NewspaperIcon sx={{ fontSize: 35, color: 'primary.main' }} />
+          Market News Intelligence
+        </Typography>
+        {live === false && (
+          <Chip label="Demo data — backend unreachable" size="small"
+            sx={{ bgcolor: 'rgba(255,179,0,0.12)', color: '#ffb300', border: '1px solid rgba(255,179,0,0.3)', fontWeight: 600 }} />
+        )}
+        <Button variant="outlined" size="small" onClick={generateNews} disabled={generating} sx={{ ml: 'auto' }}>
+          {generating ? <CircularProgress size={18} color="inherit" /> : 'Generate now'}
+        </Button>
+      </Box>
 
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', my: 10 }}>
           <CircularProgress />
         </Box>
+      ) : live === true && newsList.length === 0 ? (
+        <Alert severity="info">No market news published yet today.</Alert>
       ) : (
         <Grid container spacing={3}>
           {newsList.map((news) => {

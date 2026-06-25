@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Card, CardContent, Typography, Tabs, Tab, Button, Pagination, CircularProgress } from '@mui/material';
+import { Box, Card, CardContent, Typography, Tabs, Tab, Button, Pagination, CircularProgress, Chip, Alert } from '@mui/material';
 import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
 import ReactMarkdown from 'react-markdown';
-import axios from 'axios';
+import api from '../api/client';
 
 // Mock report text if backend is down
 const mockPreMarket = `### 🌅 Nifty Pre-Market View: Bullish Expansion Expected
@@ -32,27 +32,37 @@ const MarketReports = () => {
   const [reportType, setReportType] = useState('PRE_MARKET'); // PRE_MARKET, POST_MARKET
   const [latestReport, setLatestReport] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [live, setLive] = useState(null); // null=loading, true=live, false=demo fallback
 
   const fetchLatestReport = async (type) => {
     setLoading(true);
     try {
-      const response = await axios.get(`http://localhost:8080/api/v1/reports/latest?type=${type}`);
-      if (response.data && response.data.reportText) {
-        setLatestReport(response.data);
-      } else {
-        setLatestReport({
-          reportText: type === 'PRE_MARKET' ? mockPreMarket : mockPostMarket,
-          publishDate: new Date().toISOString().split('T')[0]
-        });
-      }
+      const response = await api.get(`/api/v1/reports/latest?type=${type}`);
+      // Backend reachable: trust it. A missing report => genuine empty state (not mock).
+      setLatestReport(response.data && response.data.reportText ? response.data : null);
+      setLive(true);
     } catch (e) {
       console.warn("Backend offline, using local simulated report models.", e.message);
       setLatestReport({
         reportText: type === 'PRE_MARKET' ? mockPreMarket : mockPostMarket,
         publishDate: new Date().toISOString().split('T')[0]
       });
+      setLive(false);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const [generating, setGenerating] = useState(false);
+  const generateReport = async () => {
+    setGenerating(true);
+    try {
+      await api.post(`/api/v1/reports/generate?type=${reportType}`, null, { timeout: 60000 });
+      await fetchLatestReport(reportType);
+    } catch (e) {
+      console.warn('Report generation failed.', e.message);
+    } finally {
+      setGenerating(false);
     }
   };
 
@@ -62,9 +72,18 @@ const MarketReports = () => {
 
   return (
     <Box sx={{ flexGrow: 1 }}>
-      <Typography variant="h4" sx={{ fontFamily: 'Outfit, sans-serif', fontWeight: 700, mb: 3 }}>
-        Daily AI Market Reports
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3, flexWrap: 'wrap' }}>
+        <Typography variant="h4" sx={{ fontFamily: 'Outfit, sans-serif', fontWeight: 700 }}>
+          Daily AI Market Reports
+        </Typography>
+        {live === false && (
+          <Chip label="Demo data — backend unreachable" size="small"
+            sx={{ bgcolor: 'rgba(255,179,0,0.12)', color: '#ffb300', border: '1px solid rgba(255,179,0,0.3)', fontWeight: 600 }} />
+        )}
+        <Button variant="outlined" size="small" onClick={generateReport} disabled={generating} sx={{ ml: 'auto' }}>
+          {generating ? <CircularProgress size={18} color="inherit" /> : 'Generate now'}
+        </Button>
+      </Box>
 
       {/* Tabs */}
       <Tabs 
@@ -110,7 +129,7 @@ const MarketReports = () => {
           </CardContent>
         </Card>
       ) : (
-        <Typography variant="body1">No reports available for today yet.</Typography>
+        <Alert severity="info">No {reportType === 'PRE_MARKET' ? 'pre-market' : 'post-market'} report has been generated yet.</Alert>
       )}
     </Box>
   );

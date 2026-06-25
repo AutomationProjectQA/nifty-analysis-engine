@@ -15,7 +15,7 @@ const TradingViewChart = () => {
     script.async = true;
     script.innerHTML = JSON.stringify({
       "autosize": true,
-      "symbol": "NSE:NIFTY",
+      "symbol": "TVC:NIFTY",
       "interval": "5",
       "timezone": "Asia/Kolkata",
       "theme": "dark",

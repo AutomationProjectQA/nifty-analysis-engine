@@ -40,6 +40,19 @@ nbdist/
 .DS_Store
 Thumbs.db
 
+# Secrets — never commit
+.env
+*.env
+!.env.example
+
+# Build artifacts
+frontend/dist.zip
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
 # Database / Docker / Runtime
 docker-data/
 *.log

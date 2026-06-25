@@ -47,6 +47,7 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
     private final WebClient.Builder webClientBuilder;
     
     private String jwtToken;
+    private String feedToken; // required by the streaming WebSocket (SmartWebSocketV2)
     private final Map<String, ScripInfo> scripMap = new ConcurrentHashMap<>();
     private final Map<Integer, Long> lastCeOiMap = new ConcurrentHashMap<>();
     private final Map<Integer, Long> lastPeOiMap = new ConcurrentHashMap<>();
@@ -154,6 +155,7 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
                     .map(res -> {
                         if (Boolean.TRUE.equals(res.get("status"))) {
                             Map<String, Object> data = (Map<String, Object>) res.get("data");
+                            this.feedToken = (String) data.get("feedToken"); // for the streaming socket
                             return (String) data.get("jwtToken");
                         }
                         throw new RuntimeException("SmartAPI Login failed: " + res.get("message"));
@@ -408,38 +410,39 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
 
     private String findCurrentMonthFutureSymbol() {
         LocalDate today = LocalDate.now();
-        LocalDate lastTuesday = findLastTuesdayOfMonth(today);
-        if (today.isAfter(lastTuesday)) {
-            lastTuesday = findLastTuesdayOfMonth(today.plusMonths(1));
+        LocalDate lastThursday = findLastThursdayOfMonth(today);
+        if (today.isAfter(lastThursday)) {
+            lastThursday = findLastThursdayOfMonth(today.plusMonths(1));
         }
-        String formatted = lastTuesday.format(DateTimeFormatter.ofPattern("ddMMMyy").withLocale(Locale.ENGLISH)).toUpperCase();
+        String formatted = lastThursday.format(DateTimeFormatter.ofPattern("ddMMMyy").withLocale(Locale.ENGLISH)).toUpperCase();
         return "NIFTY" + formatted + "FUT";
     }
 
     private String findCurrentOptionExpiryDateSymbolStr() {
         LocalDate today = LocalDate.now();
-        LocalDate nextTuesday = findNextTuesday(today);
-        if (today.getDayOfWeek() == java.time.DayOfWeek.TUESDAY && LocalDateTime.now().getHour() >= 16) {
-            nextTuesday = findNextTuesday(today.plusDays(1));
+        LocalDate nextThursday = findNextThursday(today);
+        if (today.getDayOfWeek() == java.time.DayOfWeek.THURSDAY && LocalDateTime.now().getHour() >= 16) {
+            nextThursday = findNextThursday(today.plusDays(1));
         }
-        return nextTuesday.format(DateTimeFormatter.ofPattern("ddMMMyy").withLocale(Locale.ENGLISH)).toUpperCase();
+        return nextThursday.format(DateTimeFormatter.ofPattern("ddMMMyy").withLocale(Locale.ENGLISH)).toUpperCase();
     }
 
-    private LocalDate findLastTuesdayOfMonth(LocalDate date) {
+    private LocalDate findLastThursdayOfMonth(LocalDate date) {
         LocalDate lastDay = date.withDayOfMonth(date.lengthOfMonth());
-        while (lastDay.getDayOfWeek() != java.time.DayOfWeek.TUESDAY) {
+        while (lastDay.getDayOfWeek() != java.time.DayOfWeek.THURSDAY) {
             lastDay = lastDay.minusDays(1);
         }
         return lastDay;
     }
 
-    private LocalDate findNextTuesday(LocalDate date) {
+    private LocalDate findNextThursday(LocalDate date) {
         LocalDate current = date;
-        while (current.getDayOfWeek() != java.time.DayOfWeek.TUESDAY) {
+        while (current.getDayOfWeek() != java.time.DayOfWeek.THURSDAY) {
             current = current.plusDays(1);
         }
         return current;
     }
+
 
     private double parseDouble(Object obj) {
         if (obj == null) return 0.0;
@@ -522,8 +525,58 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
         return this.jwtToken;
     }
 
+    public String getFeedToken() {
+        return this.feedToken;
+    }
+
+    public String getClientCode() {
+        return this.clientCode;
+    }
+
     public String getApiKey() {
         return this.apiKey;
+    }
+
+    /** Forces a login if not already authenticated (so feedToken/jwtToken are populated). */
+    public void ensureSession() {
+        ensureAuthenticated();
+    }
+
+    /** An instrument to stream, grouped by Angel exchangeType (1=NSE_CM index, 2=NSE_FO futures). */
+    public record StreamInstrument(int exchangeType, String token, String kind) {}
+
+    /** A streamable option contract (NFO) with its strike + type, for SnapQuote streaming. */
+    public record OptionStreamInstrument(String token, int strike, String optionType) {}
+
+    /** CE/PE tokens around ATM (±10 strikes) given the current spot, for live OI streaming. */
+    public java.util.List<OptionStreamInstrument> getOptionStreamInstruments(double spot) {
+        java.util.List<OptionStreamInstrument> list = new ArrayList<>();
+        int atm = ((int) Math.round(spot / 50.0)) * 50;
+        String expiry = findCurrentOptionExpiryDateSymbolStr();
+        for (int i = -10; i <= 10; i++) {
+            int strike = atm + i * 50;
+            for (String type : new String[]{"CE", "PE"}) {
+                String sym = "NIFTY" + expiry + strike + type;
+                if (scripMap.containsKey(sym)) {
+                    list.add(new OptionStreamInstrument(scripMap.get(sym).token(), strike, type));
+                }
+            }
+        }
+        return list;
+    }
+
+    /** Nifty spot, India VIX and the current-month future — the index feed for live ticks. */
+    public java.util.List<StreamInstrument> getStreamInstruments() {
+        java.util.List<StreamInstrument> list = new ArrayList<>();
+        String spot = scripMap.containsKey("Nifty 50") ? scripMap.get("Nifty 50").token() : "99926000";
+        String vix = scripMap.containsKey("INDIA VIX") ? scripMap.get("INDIA VIX").token() : "99926017";
+        list.add(new StreamInstrument(1, spot, "SPOT"));
+        list.add(new StreamInstrument(1, vix, "VIX"));
+        String futSym = findCurrentMonthFutureSymbol();
+        if (futSym != null && scripMap.containsKey(futSym)) {
+            list.add(new StreamInstrument(2, scripMap.get(futSym).token(), "FUTURE"));
+        }
+        return list;
     }
 
     public String getExpiryDateSymbolStr() {

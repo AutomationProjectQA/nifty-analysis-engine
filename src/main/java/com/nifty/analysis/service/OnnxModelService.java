@@ -1,9 +1,11 @@
 package com.nifty.analysis.service;
 
+import ai.onnxruntime.NodeInfo;
 import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtException;
 import ai.onnxruntime.OrtSession;
+import ai.onnxruntime.TensorInfo;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +19,9 @@ import java.util.Map;
 @Service
 @Slf4j
 public class OnnxModelService {
+
+    private static final String EXPECTED_INPUT_NAME = "input";
+    private static final int EXPECTED_FEATURE_COUNT = 8;
 
     private OrtEnvironment env;
     private OrtSession session;
@@ -35,8 +40,14 @@ public class OnnxModelService {
             try (InputStream is = resource.getInputStream()) {
                 byte[] modelBytes = is.readAllBytes();
                 session = env.createSession(modelBytes);
+                if (!validateSchema()) {
+                    log.error("nifty_model.onnx failed schema validation. Disabling model inference (fallback to neutral).");
+                    session.close();
+                    session = null;
+                    return; // isModelLoaded stays false -> callers use rule-based fallback
+                }
                 isModelLoaded = true;
-                log.info("ONNX model loaded successfully! Output nodes: {}", session.getOutputNames());
+                log.info("ONNX model loaded and schema-validated. Output nodes: {}", session.getOutputNames());
             }
         } catch (Exception e) {
             log.error("Failed to initialize ONNX Runtime or load model", e);
@@ -96,6 +107,40 @@ public class OnnxModelService {
         } catch (OrtException e) {
             log.error("ONNX Runtime exception during model prediction", e);
             return 50.0;
+        }
+    }
+
+    /**
+     * Asserts the loaded model matches the contract the serving code relies on:
+     * a single input named "input" with {@value #EXPECTED_FEATURE_COUNT} features.
+     * Guards against silently feeding a mismatched (e.g. retrained) model wrong-shaped data.
+     */
+    private boolean validateSchema() {
+        try {
+            Map<String, NodeInfo> inputInfo = session.getInputInfo();
+            if (inputInfo.size() != 1 || !inputInfo.containsKey(EXPECTED_INPUT_NAME)) {
+                log.error("ONNX schema mismatch: expected a single input named '{}', found {}",
+                        EXPECTED_INPUT_NAME, inputInfo.keySet());
+                return false;
+            }
+            NodeInfo node = inputInfo.get(EXPECTED_INPUT_NAME);
+            if (node.getInfo() instanceof TensorInfo tensorInfo) {
+                long[] shape = tensorInfo.getShape();
+                long featureDim = shape.length > 0 ? shape[shape.length - 1] : -1;
+                if (featureDim > 0 && featureDim != EXPECTED_FEATURE_COUNT) {
+                    log.error("ONNX schema mismatch: expected {} features, model expects {}",
+                            EXPECTED_FEATURE_COUNT, featureDim);
+                    return false;
+                }
+            }
+            if (session.getOutputNames().isEmpty()) {
+                log.error("ONNX schema mismatch: model has no outputs");
+                return false;
+            }
+            return true;
+        } catch (Exception e) {
+            log.error("Failed to validate ONNX schema", e);
+            return false;
         }
     }
 

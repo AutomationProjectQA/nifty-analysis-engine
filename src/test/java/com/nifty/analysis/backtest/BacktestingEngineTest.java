@@ -1,6 +1,6 @@
 package com.nifty.analysis.backtest;
 
-import com.nifty.analysis.dto.OptionSnapshotDto;
+import com.nifty.analysis.dto.AgentResponse;
 import com.nifty.analysis.engine.ConfidenceEngine;
 import com.nifty.analysis.agent.CriticAgent;
 import com.nifty.analysis.agent.TechnicalAgent;
@@ -18,6 +18,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
@@ -62,6 +64,15 @@ class BacktestingEngineTest {
                 onnxModelService,
                 technicalAgent
         );
+        ReflectionTestUtils.setField(backtestingEngine, "gatingThreshold", 60.0);
+        ReflectionTestUtils.setField(backtestingEngine, "modelWeight", 0.4);
+        ReflectionTestUtils.setField(backtestingEngine, "targetProfitPercent", 2.0);
+        ReflectionTestUtils.setField(backtestingEngine, "stopLossPercent", 40.0);
+        ReflectionTestUtils.setField(backtestingEngine, "lotSize", 65);
+        ReflectionTestUtils.setField(backtestingEngine, "entryPremium", 150.0);
+        ReflectionTestUtils.setField(backtestingEngine, "brokeragePerTrade", 40.0);
+        ReflectionTestUtils.setField(backtestingEngine, "slippagePercent", 0.5);
+        ReflectionTestUtils.setField(backtestingEngine, "thetaDecayPerHour", 0.5);
     }
 
     @Test
@@ -106,11 +117,15 @@ class BacktestingEngineTest {
         when(optionSnapshotRepository.findBySnapshotTime(any(LocalDateTime.class)))
                 .thenReturn(List.of(opt));
 
+        when(technicalAgent.analyze(any(MarketSnapshot.class)))
+                .thenReturn(new AgentResponse(80.0, "BULLISH", Collections.emptyList()));
         TechnicalAgent.TechnicalFeatures mockFeatures = new TechnicalAgent.TechnicalFeatures(50.0, 1.0, 1.0, 15.0, 0.0, 0.015, 2.5, 1.2);
         when(technicalAgent.getFeatures(any(MarketSnapshot.class), anyList())).thenReturn(mockFeatures);
         when(onnxModelService.predictBullishProbability(anyDouble(), anyDouble(), anyDouble(), anyDouble(), anyDouble(), anyDouble(), anyDouble(), anyDouble()))
                 .thenReturn(85.0);
-        
+        when(confidenceEngine.calculateRawConfidence(any(), anyList(), anyDouble(), anyBoolean()))
+                .thenReturn(new ConfidenceEngine.RawConfidenceResult(70.0, Collections.emptyMap()));
+
         CriticAgent.CriticResult critRes = new CriticAgent.CriticResult(85.0, Collections.emptyList());
         when(criticAgent.evaluateAndApplyPenalties(anyDouble(), any(), anyList(), anyBoolean())).thenReturn(critRes);
 

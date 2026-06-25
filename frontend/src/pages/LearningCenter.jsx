@@ -4,7 +4,7 @@ import Grid from '@mui/material/Grid';
 import ReactMarkdown from 'react-markdown';
 import SchoolIcon from '@mui/icons-material/School';
 import SearchIcon from '@mui/icons-material/Search';
-import axios from 'axios';
+import api from '../api/client';
 
 import AdSenseSlot from '../components/AdSenseSlot';
 
@@ -78,7 +78,7 @@ const LearningCenter = () => {
 
   const fetchArticles = async () => {
     try {
-      const response = await axios.get('http://localhost:8080/api/v1/learning/articles');
+      const response = await api.get('/api/v1/learning/articles');
       if (response.data && response.data.length > 0) {
         setArticles(response.data);
       }
