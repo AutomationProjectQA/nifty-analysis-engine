@@ -87,7 +87,8 @@ nifty:
   # Online learning: nudge confidence factor weights from resolved-trade outcomes.
   confidence:
     adaptive-enabled: true
-    learning-rate: 0.5
+    # Gentle online-learning rate (was 0.5 — lowered to reduce weight skew from noise).
+    learning-rate: 0.25
 
   # Outbound HTTP timeouts (Angel One, Gemini, Yahoo) — a hung API can't block threads.
   http:
@@ -116,8 +117,9 @@ nifty:
     trading-enabled: true
 
     # Percent of available wallet capital allocated to EACH order.
-    # e.g. 20.0 = use 20% of the wallet per trade.
-    capital-per-order-percent: 100.0
+    # e.g. 20.0 = use 20% of the wallet per trade. Was 100 (all-in per trade) — lowered to a
+    # safer default; raise it back deliberately if you understand the risk.
+    capital-per-order-percent: 20.0
 
     # Profit target as a percent of the entry premium (the "take 2% profit" goal).
     target-profit-percent: 2.0
@@ -132,9 +134,24 @@ nifty:
     # Maximum number of NEW trades to open per trading day.
     max-trades-per-day: 50
 
-    # Halt new trades for the day once cumulative realised loss reaches this.
-    # Unit matches recorded trade P&L (TradeResult.profitLoss).
-    max-loss-per-day: 1000000.0
+    # Aggregate exposure cap: max simultaneously-open (ACTIVE) positions at any time
+    # (across all strike-ladder legs). Prevents stacking many concurrent positions.
+    max-concurrent-positions: 6
+
+    # Halt new trades for the day once cumulative realised loss reaches this (NET P&L, INR).
+    # Was 10,00,000 (so high it never tripped) — lowered to a sane default; tune to your capital.
+    max-loss-per-day: 250000.0
+
+  # Live trade transaction-cost model (round-trip), subtracted from gross P&L so the
+  # recorded P&L is NET. Defaults reflect typical Indian discount-broker option charges —
+  # verify against your broker's contract note (rates change).
+  costs:
+    brokerage-per-order: 20.0       # flat ₹/order (×2 for round-trip)
+    stt-percent-on-sell: 0.001      # 0.10% STT on sell premium
+    exchange-txn-percent: 0.0003503 # ~0.03503% NSE txn on premium turnover
+    sebi-percent: 0.000001          # 0.0001% SEBI fee
+    stamp-percent-on-buy: 0.00003   # 0.003% stamp duty on buy premium
+    gst-percent: 0.18               # 18% GST on (brokerage + txn + SEBI)
 
   # Backtest execution realism — model costs so reported P&L isn't optimistic.
   backtest:

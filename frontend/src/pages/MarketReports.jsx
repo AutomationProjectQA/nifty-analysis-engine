@@ -141,6 +141,7 @@ const MarketReports = () => {
             {/* Content Render */}
             <Box className="markdown-report-body" sx={{
               color: 'text.primary',
+              '& h1, & h2': { fontFamily: 'Outfit, sans-serif', fontSize: '1.5rem', fontWeight: 700, mt: 3, mb: 2, color: 'text.primary' },
               '& h3': { fontFamily: 'Outfit, sans-serif', fontSize: '1.4rem', fontWeight: 700, mb: 2, color: 'primary.main' },
               '& h4': { fontSize: '1.05rem', fontWeight: 600, mt: 3, mb: 1, color: 'text.primary' },
               '& ul': { pl: 2, mt: 1, mb: 2 },

@@ -1,6 +1,5 @@
 package com.nifty.analysis.service;
 
-import com.nifty.analysis.entity.TradeResult;
 import com.nifty.analysis.entity.TradeSignal;
 import com.nifty.analysis.repository.TradeResultRepository;
 import com.nifty.analysis.repository.TradeSignalRepository;
@@ -13,7 +12,6 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.List;
-import java.util.Optional;
 
 /**
  * Central risk gate. Enforces the daily trading limits configured under
@@ -79,12 +77,7 @@ public class RiskGuardService {
                     "Max trades per day reached (%d/%d).", tradeCount, maxTradesPerDay));
         }
 
-        double realisedPnl = todaySignals.stream()
-                .map(s -> tradeResultRepository.findBySignalId(s.getId()))
-                .filter(Optional::isPresent)
-                .map(Optional::get)
-                .mapToDouble(TradeResult::getProfitLoss)
-                .sum();
+        double realisedPnl = tradeResultRepository.sumProfitLossSince(startOfDay);
 
         if (realisedPnl <= -Math.abs(maxLossPerDay)) {
             return RiskCheck.deny(String.format(

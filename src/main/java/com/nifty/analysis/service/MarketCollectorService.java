@@ -45,6 +45,7 @@ public class MarketCollectorService {
     private final OptionsIndicatorService optionsIndicatorService;
     private final OptionPricingService optionPricingService;
     private final OptionPremiumService optionPremiumService;
+    private final OptionCostService optionCostService;
     private final DecisionAgent decisionAgent;
     private final TelegramBotService telegramBotService;
     private final LlmService llmService;
@@ -54,11 +55,15 @@ public class MarketCollectorService {
     @org.springframework.beans.factory.annotation.Value("${nifty.order-execution.lot-size:65}")
     private int lotSize;
 
-    @Transactional
+    // NOT @Transactional on purpose: this cycle interleaves blocking external HTTP (Angel
+    // One, LLM, Telegram, order placement) with DB writes. Wrapping it all in one
+    // transaction would pin a DB connection across those slow calls (pool exhaustion).
+    // Each persistence step commits independently; the scheduler guard ensures the cycle
+    // is never re-entered concurrently.
     public void collect() {
         log.info("Starting market and option chain data collection cycle...");
         try {
-            LocalDateTime now = LocalDateTime.now();
+            LocalDateTime now = com.nifty.analysis.util.TimeUtil.nowIst();
 
             // 1. Fetch & Store Market Snapshot
             MarketSnapshotDto marketData = marketDataClient.fetchMarketData();
@@ -190,6 +195,18 @@ public class MarketCollectorService {
                 timeframe, candle.getTimestamp(), candle.getOpen(), candle.getClose(), candle.getVolume());
     }
 
+    /** True once today (IST) is past the weekly expiry (Thursday on/after) of the signal's date. */
+    private boolean isPastExpiry(LocalDateTime signalTime) {
+        if (signalTime == null) {
+            return false;
+        }
+        java.time.LocalDate expiry = signalTime.toLocalDate();
+        while (expiry.getDayOfWeek() != java.time.DayOfWeek.THURSDAY) {
+            expiry = expiry.plusDays(1);
+        }
+        return com.nifty.analysis.util.TimeUtil.todayIst().isAfter(expiry);
+    }
+
     private LocalDateTime roundToTimeframe(LocalDateTime time, int minutes) {
         int roundedMinute = (time.getMinute() / minutes) * minutes;
         return time.truncatedTo(ChronoUnit.HOURS)
@@ -220,8 +237,10 @@ public class MarketCollectorService {
 
         double spot = latest.getNiftySpot();
         for (TradeSignal signal : activeSignals) {
-            Optional<MarketSnapshot> entrySnapshot = marketSnapshotRepository.findLatestBefore(signal.getSignalTime());
-            double entrySpot = entrySnapshot.map(MarketSnapshot::getNiftySpot).orElse(spot);
+            // Prefer the entry spot stored on the signal; reconstruct only for legacy rows.
+            double entrySpot = signal.getEntrySpot() != null ? signal.getEntrySpot()
+                    : marketSnapshotRepository.findLatestBefore(signal.getSignalTime())
+                            .map(MarketSnapshot::getNiftySpot).orElse(spot);
 
             boolean isCall = "BUY_CE".equals(signal.getSignalType());
 
@@ -247,14 +266,43 @@ public class MarketCollectorService {
 
             int quantity = signal.getQuantity() != null ? signal.getQuantity() : lotSize;
 
-            if (currentOptionPrice <= signal.getStopLoss()) {
-                signal.setStatus("FAILED");
+            // EOD/expiry square-off: if the option has passed its weekly expiry without hitting
+            // SL or target, close it at its residual value instead of leaving it ACTIVE forever.
+            if (isPastExpiry(signal.getSignalTime())) {
+                double expGross = (currentOptionPrice - signal.getEntry()) * quantity;
+                double expCost = optionCostService.roundTripCost(signal.getEntry(), currentOptionPrice, quantity);
+                double expNet = Math.round((expGross - expCost) * 100.0) / 100.0;
+                signal.setStatus("EXPIRED");
                 tradeSignalRepository.save(signal);
 
                 TradeResult result = new TradeResult();
                 result.setSignal(signal);
+                result.setOutcome("EXPIRED");
+                result.setProfitLoss(expNet);
+                result.setHoldingTime(java.time.Duration.between(signal.getSignalTime(), latest.getSnapshotTime()).toSeconds());
+                result.setAccuracy(expNet >= 0 ? 100.0 : 0.0);
+                tradeResultRepository.save(result);
+                confidenceWeightTuner.reinforce(signal, expNet >= 0);
+
+                telegramBotService.sendMessage(String.format(
+                        "⌛ *TRADE RESOLVED: EXPIRED*\n\n*Signal:* %s Strike %d\n*Entry:* %.2f  *Exit (residual):* %.2f\n*Net P&L:* %.2f INR",
+                        signal.getSignalType(), signal.getStrike(), signal.getEntry(), currentOptionPrice, expNet));
+                log.info("Active trade resolved: EXPIRED for signal ID={}", signal.getId());
+                continue;
+            }
+
+            if (currentOptionPrice <= signal.getStopLoss()) {
+                signal.setStatus("FAILED");
+                tradeSignalRepository.save(signal);
+
+                double slGross = (signal.getStopLoss() - signal.getEntry()) * quantity;
+                double slCost = optionCostService.roundTripCost(signal.getEntry(), signal.getStopLoss(), quantity);
+                double slNet = Math.round((slGross - slCost) * 100.0) / 100.0;
+
+                TradeResult result = new TradeResult();
+                result.setSignal(signal);
                 result.setOutcome("STOP_LOSS");
-                result.setProfitLoss((signal.getStopLoss() - signal.getEntry()) * quantity); // INR
+                result.setProfitLoss(slNet); // NET of round-trip costs (INR)
                 result.setHoldingTime(
                         java.time.Duration.between(signal.getSignalTime(), latest.getSnapshotTime()).toSeconds());
                 result.setAccuracy(0.0);
@@ -279,10 +327,11 @@ public class MarketCollectorService {
                         "*Entry Premium:* %.2f (Nifty Spot at Entry: %.2f)\n" +
                         "*Current Premium:* %.2f (Current Nifty Spot: %.2f)\n" +
                         "*Stop Loss:* %.2f\n" +
-                        "*P&L:* %.2f INR\n" +
+                        "*Gross P&L:* %.2f INR  |  *Costs:* %.2f INR\n" +
+                        "*Net P&L:* %.2f INR\n" +
                         "*Holding Time:* %d seconds",
                         signal.getSignalType(), signal.getStrike(), signal.getEntry(), entrySpot,
-                        currentOptionPrice, spot, signal.getStopLoss(), result.getProfitLoss(),
+                        currentOptionPrice, spot, signal.getStopLoss(), slGross, slCost, slNet,
                         result.getHoldingTime());
                 telegramBotService.sendMessage(msg);
                 log.info("Active trade resolved: SL hit for signal ID={}", signal.getId());
@@ -290,10 +339,14 @@ public class MarketCollectorService {
                 signal.setStatus("COMPLETED");
                 tradeSignalRepository.save(signal);
 
+                double tgtGross = (signal.getTarget2() - signal.getEntry()) * quantity;
+                double tgtCost = optionCostService.roundTripCost(signal.getEntry(), signal.getTarget2(), quantity);
+                double tgtNet = Math.round((tgtGross - tgtCost) * 100.0) / 100.0;
+
                 TradeResult result = new TradeResult();
                 result.setSignal(signal);
                 result.setOutcome("TARGET2");
-                result.setProfitLoss((signal.getTarget2() - signal.getEntry()) * quantity); // INR
+                result.setProfitLoss(tgtNet); // NET of round-trip costs (INR)
                 result.setHoldingTime(
                         java.time.Duration.between(signal.getSignalTime(), latest.getSnapshotTime()).toSeconds());
                 result.setAccuracy(100.0);
@@ -307,10 +360,11 @@ public class MarketCollectorService {
                         "*Entry Premium:* %.2f (Nifty Spot at Entry: %.2f)\n" +
                         "*Current Premium:* %.2f (Current Nifty Spot: %.2f)\n" +
                         "*Target 2:* %.2f\n" +
-                        "*P&L:* +%.2f INR\n" +
+                        "*Gross P&L:* +%.2f INR  |  *Costs:* %.2f INR\n" +
+                        "*Net P&L:* %.2f INR\n" +
                         "*Holding Time:* %d seconds",
                         signal.getSignalType(), signal.getStrike(), signal.getEntry(), entrySpot,
-                        currentOptionPrice, spot, signal.getTarget2(), result.getProfitLoss(), result.getHoldingTime());
+                        currentOptionPrice, spot, signal.getTarget2(), tgtGross, tgtCost, tgtNet, result.getHoldingTime());
                 telegramBotService.sendMessage(msg);
                 log.info("Active trade resolved: Target 2 hit for signal ID={}", signal.getId());
             }

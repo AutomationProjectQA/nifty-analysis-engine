@@ -112,11 +112,11 @@ const Performance = () => {
       ) : (
         <Grid container spacing={2} sx={{ mb: 4 }}>
           <StatCard label="Total Trades" value={summary.totalTrades} />
-          <StatCard label="Win Rate" value={`${summary.winRatePercentage}%`}
-            color={summary.winRatePercentage >= 50 ? 'primary.main' : 'secondary.main'} />
+          <StatCard label="Win Rate" value={`${summary.winRatePercentage ?? 0}%`}
+            color={(summary.winRatePercentage ?? 0) >= 50 ? 'primary.main' : 'secondary.main'} />
           <StatCard label="Net P&L" value={fmtInr(summary.totalProfitLossInr)}
             color={summary.totalProfitLossInr >= 0 ? 'primary.main' : 'secondary.main'} />
-          <StatCard label="Target Hits" value={summary.target2Hits} color="primary.main" />
+          <StatCard label="Target-2 Hits" value={summary.target2Hits} color="primary.main" />
           <StatCard label="Stop-Loss Hits" value={summary.stopLossHits} color="secondary.main" />
           <StatCard label="Expired" value={summary.expiredTrades} color="text.secondary" />
         </Grid>
@@ -162,14 +162,14 @@ const Performance = () => {
           <Chip label="Backtest complete" color="success" size="small" sx={{ mb: 2 }} />
           <Grid container spacing={2}>
             <StatCard label="Signals" value={backtest.totalSignals} />
-            <StatCard label="Win Rate" value={`${backtest.winRatePercentage}%`}
-              color={backtest.winRatePercentage >= 50 ? 'primary.main' : 'secondary.main'} />
+            <StatCard label="Win Rate" value={`${backtest.winRatePercentage ?? 0}%`}
+              color={(backtest.winRatePercentage ?? 0) >= 50 ? 'primary.main' : 'secondary.main'} />
             <StatCard label="Net P&L" value={fmtInr(backtest.netPnlInr)}
               color={backtest.netPnlInr >= 0 ? 'primary.main' : 'secondary.main'} />
             <StatCard label="Gross P&L" value={fmtInr(backtest.grossPnlInr)} />
             <StatCard label="Costs" value={fmtInr(backtest.totalCostsInr)} color="secondary.main" />
             <StatCard label="Avg Hold" value={fmtDuration(backtest.avgHoldingSeconds)} />
-            <StatCard label="Target Hits" value={backtest.target2Hits} color="primary.main" />
+            <StatCard label="Target-2 Hits" value={backtest.target2Hits} color="primary.main" />
             <StatCard label="Stop-Loss Hits" value={backtest.stopLossHits} color="secondary.main" />
             <StatCard label="Expired" value={backtest.expired} color="text.secondary" />
             <StatCard label="Target1 Touches" value={backtest.target1Touches} />

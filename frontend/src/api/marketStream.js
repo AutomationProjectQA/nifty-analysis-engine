@@ -11,6 +11,7 @@ let connected = false;
 const connListeners = new Set();
 const subs = new Map(); // id -> { topic, cb, stompSub }
 let nextId = 1;
+let teardownTimer = null; // deferred deactivation when no subscriptions remain
 
 function notifyConn(state) {
   connected = state;
@@ -48,6 +49,8 @@ function ensureClient() {
 
 /** Subscribe to a STOMP topic. Returns an unsubscribe function. */
 export function subscribe(topic, cb) {
+  // A new subscriber cancels any pending teardown.
+  if (teardownTimer) { clearTimeout(teardownTimer); teardownTimer = null; }
   const id = nextId++;
   const entry = { topic, cb, stompSub: null };
   subs.set(id, entry);
@@ -59,6 +62,18 @@ export function subscribe(topic, cb) {
       try { e.stompSub.unsubscribe(); } catch (err) { /* noop */ }
     }
     subs.delete(id);
+    // When nothing is listening, deactivate the socket after a short grace period
+    // (avoids churn during route changes / StrictMode mount→unmount→remount).
+    if (subs.size === 0 && client && !teardownTimer) {
+      teardownTimer = setTimeout(() => {
+        teardownTimer = null;
+        if (subs.size === 0 && client) {
+          try { client.deactivate(); } catch (err) { /* noop */ }
+          client = null;
+          connected = false;
+        }
+      }, 30000);
+    }
   };
 }
 

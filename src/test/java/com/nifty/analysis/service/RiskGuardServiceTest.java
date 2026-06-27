@@ -1,6 +1,5 @@
 package com.nifty.analysis.service;
 
-import com.nifty.analysis.entity.TradeResult;
 import com.nifty.analysis.entity.TradeSignal;
 import com.nifty.analysis.repository.TradeResultRepository;
 import com.nifty.analysis.repository.TradeSignalRepository;
@@ -15,7 +14,6 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -93,8 +91,6 @@ class RiskGuardServiceTest {
             today.add(signal(i));
         }
         when(tradeSignalRepository.findBySignalTimeAfter(any())).thenReturn(today);
-        // results don't matter here; loss check isn't reached
-        lenient().when(tradeResultRepository.findBySignalId(any())).thenReturn(Optional.empty());
 
         RiskGuardService.RiskCheck check = riskGuardService.canOpenNewTrade();
 
@@ -103,16 +99,8 @@ class RiskGuardServiceTest {
 
     @Test
     void dailyLossLimitExceeded_blocks() {
-        TradeSignal s1 = signal(1);
-        TradeSignal s2 = signal(2);
-        when(tradeSignalRepository.findBySignalTimeAfter(any())).thenReturn(List.of(s1, s2));
-
-        TradeResult r1 = new TradeResult();
-        r1.setProfitLoss(-600.0);
-        TradeResult r2 = new TradeResult();
-        r2.setProfitLoss(-600.0); // cumulative -1200 <= -1000 limit
-        when(tradeResultRepository.findBySignalId(1L)).thenReturn(Optional.of(r1));
-        when(tradeResultRepository.findBySignalId(2L)).thenReturn(Optional.of(r2));
+        when(tradeSignalRepository.findBySignalTimeAfter(any())).thenReturn(List.of(signal(1), signal(2)));
+        when(tradeResultRepository.sumProfitLossSince(any())).thenReturn(-1200.0); // <= -1000 limit
 
         RiskGuardService.RiskCheck check = riskGuardService.canOpenNewTrade();
 
@@ -121,12 +109,8 @@ class RiskGuardServiceTest {
 
     @Test
     void withinAllLimits_allows() {
-        TradeSignal s1 = signal(1);
-        when(tradeSignalRepository.findBySignalTimeAfter(any())).thenReturn(List.of(s1));
-
-        TradeResult r1 = new TradeResult();
-        r1.setProfitLoss(-200.0); // small loss, under limit
-        when(tradeResultRepository.findBySignalId(1L)).thenReturn(Optional.of(r1));
+        when(tradeSignalRepository.findBySignalTimeAfter(any())).thenReturn(List.of(signal(1)));
+        when(tradeResultRepository.sumProfitLossSince(any())).thenReturn(-200.0); // under limit
 
         RiskGuardService.RiskCheck check = riskGuardService.canOpenNewTrade();
 

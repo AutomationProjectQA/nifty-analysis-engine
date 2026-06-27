@@ -22,16 +22,31 @@ const mockNews = [
   }
 ];
 
+// Require an id and ensure a usable summary/title so a malformed item can't break the list.
+const sanitizeNews = (rows) =>
+  (rows || [])
+    .filter((n) => n && n.id != null)
+    .map((n) => ({ ...n, title: n.title || 'Market update', summary: n.summary || '' }));
+
+// Safe published date (no "Invalid Date").
+const fmtNewsDate = (value) => {
+  const d = value ? new Date(value) : null;
+  return d && !isNaN(d.getTime())
+    ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    : '—';
+};
+
 const NewsIntelligence = () => {
   const [newsList, setNewsList] = useState(mockNews);
   const [loading, setLoading] = useState(false);
   const [live, setLive] = useState(null); // null=loading, true=live, false=demo fallback
+  const [genMsg, setGenMsg] = useState(null); // { severity, text } feedback after a generate
 
   const fetchNews = async () => {
     setLoading(true);
     try {
       const response = await api.get('/api/v1/news/today');
-      setNewsList(response.data || []); // trust backend even when empty (genuine "no news yet")
+      setNewsList(sanitizeNews(response.data)); // trust backend even when empty (genuine "no news yet")
       setLive(true);
     } catch (e) {
       console.warn("Backend offline, using local simulated news vlogs.", e.message);
@@ -44,11 +59,14 @@ const NewsIntelligence = () => {
   const [generating, setGenerating] = useState(false);
   const generateNews = async () => {
     setGenerating(true);
+    setGenMsg(null);
     try {
       await api.post('/api/v1/news/generate', null, { timeout: 60000 });
       await fetchNews();
+      setGenMsg({ severity: 'success', text: 'Fresh news intelligence generated.' });
     } catch (e) {
       console.warn('News generation failed.', e.message);
+      setGenMsg({ severity: 'error', text: 'News generation failed. Check the backend logs and try again.' });
     } finally {
       setGenerating(false);
     }
@@ -74,6 +92,12 @@ const NewsIntelligence = () => {
         </Button>
       </Box>
 
+      {genMsg && (
+        <Alert severity={genMsg.severity} sx={{ mb: 3 }} onClose={() => setGenMsg(null)}>
+          {genMsg.text}
+        </Alert>
+      )}
+
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', my: 10 }}>
           <CircularProgress />
@@ -83,7 +107,7 @@ const NewsIntelligence = () => {
       ) : (
         <Grid container spacing={3}>
           {newsList.map((news) => {
-            const timeString = new Date(news.publishedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+            const timeString = fmtNewsDate(news.publishedAt);
             return (
               <Grid key={news.id} size={12}>
                 <Card>

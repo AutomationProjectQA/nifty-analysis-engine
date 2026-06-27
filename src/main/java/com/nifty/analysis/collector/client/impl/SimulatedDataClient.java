@@ -53,20 +53,20 @@ public class SimulatedDataClient implements MarketDataClient, OptionChainClient 
                 futurePrice,
                 currentVix,
                 currentVolume,
-                LocalDateTime.now()
+                com.nifty.analysis.util.TimeUtil.nowIst()
         );
     }
 
     @Override
     public synchronized List<OptionSnapshotDto> fetchOptionChain() {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = com.nifty.analysis.util.TimeUtil.nowIst();
         // Determine ATM strike (Nifty strikes are in multiples of 50)
         int atmStrike = ((int) Math.round(currentSpot / 50.0)) * 50;
         
         List<OptionSnapshotDto> snapshots = new ArrayList<>();
         
-        // Generate 10 strikes below and 10 strikes above ATM (21 strikes total)
-        for (int i = -10; i <= 10; i++) {
+        // Generate 20 strikes below and 20 above ATM (±1000 pts, 41 strikes total)
+        for (int i = -20; i <= 20; i++) {
             int strike = atmStrike + (i * 50);
             
             // Generate baseline Open Interest (OI)

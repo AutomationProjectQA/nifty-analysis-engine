@@ -15,6 +15,7 @@ import MenuIcon from '@mui/icons-material/Menu';
 
 import theme from './theme';
 import useBackendStatus from './hooks/useBackendStatus';
+import useFeedStatus from './hooks/useFeedStatus';
 import { useStreamConnected } from './api/marketStream';
 import ErrorBoundary from './components/ErrorBoundary';
 import AdSenseSlot from './components/AdSenseSlot';
@@ -47,6 +48,7 @@ function NavigationLayout({ children }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const online = useBackendStatus();
   const streaming = useStreamConnected();
+  const dataSource = useFeedStatus();
 
   const handleDrawerToggle = () => {
     setMobileOpen(!mobileOpen);
@@ -120,14 +122,19 @@ function NavigationLayout({ children }) {
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             {(() => {
-              const offline = online === false;
-              const label = online === null
-                ? 'Connecting…'
-                : online
-                  ? (streaming ? 'Live • Streaming' : 'Live')
-                  : 'Offline — demo data';
-              const rgb = offline ? '224, 72, 61' : '0, 179, 134';
-              const color = offline ? '#e0483d' : '#00b386';
+              // Honest status: Offline (backend down) > Simulated (feed degraded) > Live.
+              // A healthy /health + open socket does NOT imply real market data is flowing,
+              // so a SIMULATED feed is surfaced as such instead of a green "Live".
+              let label, color, rgb;
+              if (online === false) {
+                label = 'Offline'; color = '#e0483d'; rgb = '224, 72, 61';
+              } else if (online === null) {
+                label = 'Connecting…'; color = '#6b7185'; rgb = '107, 113, 133';
+              } else if (dataSource === 'SIMULATED') {
+                label = 'Simulated data'; color = '#ff9f0a'; rgb = '255, 159, 10';
+              } else {
+                label = streaming ? 'Live • Streaming' : 'Live'; color = '#00b386'; rgb = '0, 179, 134';
+              }
               return (
                 <Chip
                   icon={<FiberManualRecordIcon sx={{ fontSize: '10px !important', color: `${color} !important` }} />}

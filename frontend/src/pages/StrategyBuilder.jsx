@@ -122,15 +122,25 @@ const StrategyBuilder = () => {
   };
 
   const removeLeg = (id) => setLegs((prev) => prev.filter((l) => l.id !== id));
-  const setLots = (id, lots) =>
-    setLegs((prev) => prev.map((l) => (l.id === id ? { ...l, lots: Math.max(1, lots) } : l)));
+  const setLots = (id, lots) => {
+    // Lots must be a positive integer; coerce away empty/NaN/decimal input.
+    const n = Math.max(1, Math.floor(Number(lots) || 1));
+    setLegs((prev) => prev.map((l) => (l.id === id ? { ...l, lots: n } : l)));
+  };
 
   // --- payoff curve --------------------------------------------------------
   const payoff = useMemo(() => {
     if (!spot || legs.length === 0) return [];
-    const lo = Math.round(spot * 0.9);
-    const hi = Math.round(spot * 1.1);
-    const points = 121;
+    // Domain must extend BEYOND the outermost strikes so the curve reaches its asymptotic
+    // (capped or open-ended) region at the edges — otherwise breakevens/max-loss for wide
+    // strategies (condor/strangle) and unlimited-risk detection are wrong.
+    const strikes = legs.map((l) => l.strike);
+    const minK = Math.min(...strikes);
+    const maxK = Math.max(...strikes);
+    const pad = Math.max(spot * 0.1, (maxK - minK) * 0.6, 300);
+    const lo = Math.max(1, Math.min(spot, minK) - pad);
+    const hi = Math.max(spot, maxK) + pad;
+    const points = 161;
     const out = [];
     for (let i = 0; i < points; i++) {
       const s = lo + ((hi - lo) * i) / (points - 1);
@@ -144,6 +154,20 @@ const StrategyBuilder = () => {
 
   if (loading) {
     return <Box sx={{ display: 'flex', justifyContent: 'center', p: 8 }}><CircularProgress /></Box>;
+  }
+
+  // No strikes => can't build a strategy (avoids string-typed strikes / ₹0 premiums).
+  if (!strikes.length) {
+    return (
+      <Box>
+        <Typography variant="h4" sx={{ fontFamily: 'Outfit, sans-serif', fontWeight: 800, mb: 2 }}>Strategy Builder</Typography>
+        <Card><CardContent>
+          <Typography color="text.secondary">
+            {error || 'No option premiums available yet. Once the option chain loads, you can build a strategy here.'}
+          </Typography>
+        </CardContent></Card>
+      </Box>
+    );
   }
 
   return (
@@ -232,7 +256,7 @@ const StrategyBuilder = () => {
                       <TextField size="small" type="number" value={leg.lots}
                         onChange={(e) => setLots(leg.id, Number(e.target.value))}
                         label="Lots" sx={{ width: 84 }} inputProps={{ min: 1 }} />
-                      <IconButton size="small" onClick={() => removeLeg(leg.id)} sx={{ ml: 'auto' }}>
+                      <IconButton size="small" aria-label="Remove leg" onClick={() => removeLeg(leg.id)} sx={{ ml: 'auto' }}>
                         <DeleteOutlineIcon fontSize="small" />
                       </IconButton>
                     </Box>
@@ -316,18 +340,20 @@ function computeMetrics(payoff, legs) {
     return { maxProfitLabel: '—', maxLossLabel: '—', net: 0, breakevenLabel: '—' };
   }
   const pnls = payoff.map((p) => p.pnl);
+  const n = pnls.length;
   const maxProfit = Math.max(...pnls);
   const maxLoss = Math.min(...pnls);
 
-  // Detect open-ended payoff (still rising/falling at the edges = unlimited).
-  const risingAtRightEdge = pnls[pnls.length - 1] > pnls[pnls.length - 2];
-  const fallingAtLeftEdge = pnls[0] > pnls[1];
-  const unlimitedProfit = (risingAtRightEdge && maxProfit === pnls[pnls.length - 1]) ||
-    (fallingAtLeftEdge && maxProfit === pnls[0]);
-  const risingAtLeft = pnls[0] < pnls[1];
-  const fallingAtRight = pnls[pnls.length - 1] < pnls[pnls.length - 2];
-  const unlimitedLoss = (fallingAtRight && maxLoss === pnls[pnls.length - 1]) ||
-    (risingAtLeft && maxLoss === pnls[0] && false); // left-edge handled below
+  // The payoff at expiry is piecewise-linear; beyond the outermost strikes the slope is
+  // constant. The sign of the slope at each edge tells us if profit/loss is open-ended.
+  //   rightSlope > 0 → profit grows as spot rises (unlimited profit upside)
+  //   rightSlope < 0 → loss grows as spot rises  (unlimited loss upside)
+  //   leftSlope  > 0 → far-left pnl higher → profit grows as spot falls (unlimited profit downside)
+  //   leftSlope  < 0 → far-left pnl lower  → loss grows as spot falls  (unlimited loss downside)
+  const rightSlope = pnls[n - 1] - pnls[n - 2];
+  const leftSlope = pnls[0] - pnls[1];
+  const unlimitedProfit = rightSlope > 0 || leftSlope > 0;
+  const unlimitedLoss = rightSlope < 0 || leftSlope < 0;
 
   // net debit/credit (points * lot)
   const net = legs.reduce((acc, leg) => {

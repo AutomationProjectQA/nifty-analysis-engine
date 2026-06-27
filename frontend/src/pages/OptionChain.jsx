@@ -20,6 +20,22 @@ const mockOptionChain = [
   { strikePrice: 23700, ceOi: 2850000, peOi: 150000, ceOiChange: 850000, peOiChange: 10000, iv: 13.8, pcr: 0.05, maxPain: 23500, ceVolume: 920000, peVolume: 40000 }
 ];
 
+// Drop rows without a valid strike and coerce every numeric field to a real number, so the
+// table/chart never hit `.toString()` on undefined, NaN cells, or duplicate/undefined keys.
+const sanitizeChain = (rows) =>
+  (rows || [])
+    .filter((r) => r && r.strikePrice != null)
+    .map((r) => ({
+      ...r,
+      ceOi: Number(r.ceOi) || 0,
+      peOi: Number(r.peOi) || 0,
+      ceOiChange: Number(r.ceOiChange) || 0,
+      peOiChange: Number(r.peOiChange) || 0,
+      iv: Number(r.iv) || 0,
+      ceVolume: Number(r.ceVolume) || 0,
+      peVolume: Number(r.peVolume) || 0,
+    }));
+
 const OptionChain = () => {
   const [optionChain, setOptionChain] = useState(mockOptionChain);
   const [spotPrice, setSpotPrice] = useState(23510.50);
@@ -29,16 +45,19 @@ const OptionChain = () => {
   const fetchOptionData = async () => {
     try {
       const response = await api.get('/api/v1/options/latest');
-      if (response.data && response.data.length > 0) {
-        setOptionChain(response.data);
+      const clean = sanitizeChain(response.data);
+      if (clean.length > 0) {
+        setOptionChain(clean);
       }
 
       const spotRes = await api.get('/api/v1/market/latest');
-      if (spotRes.data) {
+      if (spotRes.data && spotRes.data.niftySpot != null) {
         setSpotPrice(spotRes.data.niftySpot);
         setVwap(spotRes.data.vwap ?? null);
       }
-      setLive(true);
+      // Only claim "live" when we actually got live chain data; otherwise we're still
+      // showing the mock fallback, so keep the demo indicator on.
+      setLive(clean.length > 0);
     } catch (e) {
       console.warn("Backend down, showing simulated option chain data.", e.message);
       setLive(false);
@@ -49,11 +68,15 @@ const OptionChain = () => {
     fetchOptionData(); // initial paint via REST
     // Live updates pushed over WebSocket — no more polling.
     const u1 = subscribe('/topic/options', (data) => {
-      if (data && data.length > 0) setOptionChain(data);
-      setLive(true);
+      const clean = sanitizeChain(data);
+      // Only apply + claim live on a real frame; an empty frame must not clear the demo state.
+      if (clean.length > 0) {
+        setOptionChain(clean);
+        setLive(true);
+      }
     });
     const u2 = subscribe('/topic/market', (m) => {
-      if (m) {
+      if (m && m.niftySpot != null) {
         setSpotPrice(m.niftySpot);
         setVwap(m.vwap ?? null);
       }
@@ -64,7 +87,12 @@ const OptionChain = () => {
       const byStrike = new Map(ticks.map((t) => [t.strikePrice, t]));
       setOptionChain((prev) => prev.map((row) => {
         const t = byStrike.get(row.strikePrice);
-        return t ? { ...row, ceOi: t.ceOi, peOi: t.peOi } : row;
+        if (!t) return row;
+        return {
+          ...row,
+          ceOi: Number(t.ceOi) || row.ceOi,
+          peOi: Number(t.peOi) || row.peOi,
+        };
       }));
       setLive(true);
     });
@@ -72,7 +100,13 @@ const OptionChain = () => {
   }, []);
 
   // Compute ATM Strike closest to spot
-  const atmStrike = Math.round(spotPrice / 50) * 50;
+  // ATM = the actual chain strike nearest to spot (don't assume a fixed 50-pt step, so the
+  // ATM highlight still lands on a real row for any strike spacing).
+  const atmStrike = optionChain.length
+    ? optionChain.reduce((closest, s) =>
+        Math.abs(s.strikePrice - spotPrice) < Math.abs(closest - spotPrice) ? s.strikePrice : closest,
+        optionChain[0].strikePrice)
+    : Math.round(spotPrice / 50) * 50;
 
   // Compute overall PCR and Max Pain
   let totalCalls = 0;
@@ -120,9 +154,13 @@ const OptionChain = () => {
         <Typography variant="h4" sx={{ fontFamily: 'Outfit, sans-serif', fontWeight: 700 }}>
           Option Chain Analytics
         </Typography>
+        {live === null && (
+          <Chip label="Connecting…" size="small"
+            sx={{ bgcolor: 'rgba(107,113,133,0.12)', color: 'text.secondary', border: '1px solid rgba(107,113,133,0.25)', fontWeight: 600 }} />
+        )}
         {live === false && (
-          <Chip label="Demo data — backend unreachable" size="small"
-            sx={{ bgcolor: 'rgba(255,179,0,0.12)', color: '#ffb300', border: '1px solid rgba(255,179,0,0.3)', fontWeight: 600 }} />
+          <Chip label="Demo data — not live" size="small"
+            sx={{ bgcolor: 'rgba(255,159,10,0.12)', color: '#ff9f0a', border: '1px solid rgba(255,159,10,0.3)', fontWeight: 600 }} />
         )}
       </Box>
 
@@ -168,7 +206,7 @@ const OptionChain = () => {
             <ResponsiveContainer>
               <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e9eaf2" />
-                <XAxis dataKey="name" stroke="#6b7185" />
+                <XAxis dataKey="name" stroke="#6b7185" interval="preserveStartEnd" tick={{ fontSize: 11 }} />
                 <YAxis stroke="#6b7185" />
                 <Tooltip contentStyle={{ backgroundColor: '#ffffff', borderColor: '#e9eaf2', borderRadius: 10, color: '#1b1d28', boxShadow: '0 4px 12px rgba(16,24,40,0.08)' }} />
                 <Legend />
@@ -220,7 +258,7 @@ const OptionChain = () => {
                   key={row.strikePrice} 
                   sx={{ 
                     bgcolor: isAtm ? 'rgba(38, 166, 154, 0.05)' : 'transparent',
-                    '&:hover': { bgcolor: 'rgba(255, 255, 255, 0.02) !important' }
+                    '&:hover': { bgcolor: 'action.hover' }
                   }}
                 >
                   {/* CE Volume */}

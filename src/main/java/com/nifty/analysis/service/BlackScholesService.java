@@ -46,4 +46,40 @@ public class BlackScholesService {
 
         return Math.max(0.0, Math.round(premium * 100.0) / 100.0);
     }
+
+    /**
+     * Implied volatility (as a percentage) backed out of a market option price via
+     * Newton-Raphson. Returns -1 if it can't be solved (price below intrinsic, no
+     * convergence, etc.) so the caller can fall back. This captures the real per-strike,
+     * per-type volatility smile instead of a single hardcoded IV.
+     *
+     * @param marketPrice the observed option premium (LTP)
+     */
+    public double impliedVol(double spot, double strike, double years, boolean isCall, double marketPrice) {
+        if (marketPrice <= 0 || spot <= 0 || strike <= 0) {
+            return -1.0;
+        }
+        double intrinsic = isCall ? Math.max(spot - strike, 0.0) : Math.max(strike - spot, 0.0);
+        if (marketPrice <= intrinsic) {
+            return -1.0; // no time value to invert
+        }
+        double sigma = 0.20; // initial guess: 20%
+        for (int i = 0; i < 60; i++) {
+            double price = price(spot, strike, sigma * 100.0, years, isCall);
+            double diff = price - marketPrice;
+            if (Math.abs(diff) < 0.01) {
+                break;
+            }
+            double ds = 0.0001;
+            double vega = (price(spot, strike, (sigma + ds) * 100.0, years, isCall) - price) / ds;
+            if (Math.abs(vega) < 1e-8) {
+                break;
+            }
+            sigma -= diff / vega;
+            if (sigma <= 0.001) sigma = 0.001;
+            if (sigma > 5.0) sigma = 5.0;
+        }
+        double ivPercent = Math.round(sigma * 100.0 * 100.0) / 100.0;
+        return (ivPercent > 0.5 && ivPercent < 400.0) ? ivPercent : -1.0;
+    }
 }

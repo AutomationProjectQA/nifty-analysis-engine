@@ -49,8 +49,8 @@ public class OptionPremiumService {
             spot = chain.stream().mapToInt(OptionSnapshot::getStrikePrice).average().orElse(0.0);
         }
 
-        LocalDate expiry = nextWeeklyExpiry(LocalDate.now());
-        long days = Math.max(0, ChronoUnit.DAYS.between(LocalDate.now(), expiry));
+        LocalDate expiry = nextWeeklyExpiry(com.nifty.analysis.util.TimeUtil.todayIst());
+        long days = Math.max(0, ChronoUnit.DAYS.between(com.nifty.analysis.util.TimeUtil.todayIst(), expiry));
         double years = days / 365.0;
 
         final double spotFinal = spot;

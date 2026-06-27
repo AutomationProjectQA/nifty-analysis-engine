@@ -12,12 +12,13 @@ export default function useBackendStatus(intervalMs = 15000) {
   useEffect(() => {
     let active = true;
 
+    const controller = new AbortController();
     const check = async () => {
       try {
-        const res = await api.get('/api/v1/health', { timeout: 5000 });
+        const res = await api.get('/api/v1/health', { timeout: 5000, signal: controller.signal });
         if (active) setOnline(res.status === 200);
       } catch (err) {
-        if (active) setOnline(false); // network error or 503 => not healthy
+        if (active && err?.code !== 'ERR_CANCELED') setOnline(false); // network error or 503 => not healthy
       }
     };
 
@@ -26,6 +27,7 @@ export default function useBackendStatus(intervalMs = 15000) {
     return () => {
       active = false;
       clearInterval(id);
+      controller.abort();
     };
   }, [intervalMs]);
 

@@ -51,4 +51,13 @@ public class TradeSignal {
 
     @Column(name = "thesis", columnDefinition = "TEXT")
     private String thesis;
+
+    // Broker order id when a real order was placed (null for paper/simulated signals).
+    // Enables reconciliation against the broker order book.
+    @Column(name = "order_id", length = 50)
+    private String orderId;
+
+    // Nifty spot at entry, captured at signal time (avoids reconstructing it later).
+    @Column(name = "entry_spot")
+    private Double entrySpot;
 }

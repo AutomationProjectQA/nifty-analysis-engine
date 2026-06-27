@@ -60,6 +60,8 @@ class MarketCollectorServiceTest {
     @Mock
     private OptionPremiumService optionPremiumService;
     @Mock
+    private OptionCostService optionCostService;
+    @Mock
     private DecisionAgent decisionAgent;
     @Mock
     private TelegramBotService telegramBotService;
@@ -92,6 +94,7 @@ class MarketCollectorServiceTest {
                 optionsIndicatorService,
                 optionPricingService,
                 optionPremiumService,
+                optionCostService,
                 decisionAgent,
                 telegramBotService,
                 llmService,
@@ -102,6 +105,8 @@ class MarketCollectorServiceTest {
         // No theoretical-premium fallback by default; individual tests override as needed.
         lenient().when(optionPremiumService.latestPremiums())
                 .thenReturn(new com.nifty.analysis.dto.OptionPremiumDto.Response(0.0, "", 0, List.of()));
+        // Zero costs by default so existing assertions are unaffected; cost test overrides.
+        lenient().when(optionCostService.roundTripCost(anyDouble(), anyDouble(), anyInt())).thenReturn(0.0);
     }
 
     @Test
@@ -251,6 +256,39 @@ class MarketCollectorServiceTest {
 
         assertEquals("ACTIVE", activeSignal.getStatus()); // unresolved, left for next cycle
         verify(tradeResultRepository, never()).save(any(TradeResult.class));
+    }
+
+    @Test
+    void testUpdateActiveTrades_NetPnlSubtractsCosts() {
+        // Recorded P&L must be NET of round-trip transaction costs.
+        TradeSignal activeSignal = new TradeSignal();
+        activeSignal.setId(13L);
+        activeSignal.setSignalTime(LocalDateTime.now().minusMinutes(5));
+        activeSignal.setSignalType("BUY_CE");
+        activeSignal.setStrike(23500);
+        activeSignal.setEntry(150.0);
+        activeSignal.setStopLoss(135.0);
+        activeSignal.setTarget1(165.0);
+        activeSignal.setTarget2(180.0);
+        activeSignal.setQuantity(65);
+        activeSignal.setStatus("ACTIVE");
+
+        when(tradeSignalRepository.findByStatus("ACTIVE")).thenReturn(List.of(activeSignal));
+        when(marketSnapshotRepository.findLatestBefore(any(LocalDateTime.class)))
+                .thenReturn(Optional.of(new MarketSnapshot()));
+        when(optionPricingService.getOptionLtp("BUY_CE", 23500)).thenReturn(182.0); // >= target2 180
+        when(optionCostService.roundTripCost(150.0, 180.0, 65)).thenReturn(200.0);
+
+        MarketSnapshot latestSnap = new MarketSnapshot();
+        latestSnap.setSnapshotTime(LocalDateTime.now());
+        latestSnap.setNiftySpot(23560.0);
+
+        ArgumentCaptor<TradeResult> resultCaptor = ArgumentCaptor.forClass(TradeResult.class);
+        marketCollectorService.updateActiveTrades(latestSnap);
+
+        verify(tradeResultRepository).save(resultCaptor.capture());
+        // gross = (180-150)*65 = 1950 ; net = 1950 - 200 = 1750
+        assertEquals(1750.0, resultCaptor.getValue().getProfitLoss(), 0.01);
     }
 
     @Test

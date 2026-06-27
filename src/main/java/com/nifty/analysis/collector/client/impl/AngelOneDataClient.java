@@ -54,6 +54,21 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
     private final Map<Integer, Long> lastPeOiMap = new ConcurrentHashMap<>();
     private boolean scripMasterLoaded = false;
 
+    // For seeding OI baselines from the DB after a restart (so the first cycle's OI-change
+    // isn't a misleading 0). Optional field injection keeps the constructor unchanged.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.nifty.analysis.repository.OptionSnapshotRepository optionSnapshotRepository;
+    private volatile boolean oiBaselineSeeded = false;
+
+    // For backing out real per-strike IV from live option LTP (volatility smile).
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.nifty.analysis.service.BlackScholesService blackScholesService;
+
+    // Proactively refresh the JWT well before Angel One's ~24h expiry, so calls don't start
+    // failing mid-session (which would silently fall back to simulated data).
+    private static final long TOKEN_TTL_MS = 8L * 60 * 60 * 1000;
+    private volatile long tokenIssuedAtMs = 0;
+
     private record ScripInfo(String token, String symbol, String exchSeg, String expiry, double strike) {}
 
     @PostConstruct
@@ -120,13 +135,15 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
     }
 
     private synchronized void ensureAuthenticated() {
-        if (jwtToken != null) {
+        // Re-authenticate if there's no token OR the current one is past its refresh TTL.
+        if (jwtToken != null && (System.currentTimeMillis() - tokenIssuedAtMs) < TOKEN_TTL_MS) {
             return;
         }
-        
+
         if (apiKey.isEmpty() || clientCode.isEmpty() || password.isEmpty() || totpKey.isEmpty()) {
             log.warn("Angel One SmartAPI credentials are not fully configured. Using simulated fallback token.");
             jwtToken = "SIMULATED_JWT_TOKEN";
+            tokenIssuedAtMs = System.currentTimeMillis();
             return;
         }
 
@@ -171,6 +188,7 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
             log.error("Angel One authentication failed. Falling back to simulated authentication token.", e);
             jwtToken = "SIMULATED_JWT_TOKEN";
         }
+        tokenIssuedAtMs = System.currentTimeMillis(); // stamp success or fallback; TTL governs the next retry
     }
 
     @Override
@@ -262,7 +280,7 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
                 }
 
                 dataFeedStatus.update(true); // real live market data
-                return new MarketSnapshotDto(spot, futures, vix, volume, LocalDateTime.now());
+                return new MarketSnapshotDto(spot, futures, vix, volume, com.nifty.analysis.util.TimeUtil.nowIst());
             }
         } catch (Exception e) {
             log.error("Failed to fetch market data from Angel One API. Using simulated fallback.", e);
@@ -270,13 +288,42 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
         return getSimulatedFallbackMarketData();
     }
 
+    /**
+     * Seeds the in-memory OI baselines from the last stored snapshot once after startup, so the
+     * first live cycle computes a real OI-change instead of 0 (which would skip OI-based safety
+     * gates right after a deploy). Best-effort: never blocks data collection.
+     */
+    private void seedOiBaselineIfNeeded() {
+        if (oiBaselineSeeded || optionSnapshotRepository == null) {
+            return;
+        }
+        try {
+            java.time.LocalDateTime latest = optionSnapshotRepository.findLatestSnapshotTime();
+            if (latest != null) {
+                int seeded = 0;
+                for (com.nifty.analysis.entity.OptionSnapshot o : optionSnapshotRepository.findBySnapshotTime(latest)) {
+                    if (o.getStrikePrice() == null) continue;
+                    if (o.getCeOi() != null) lastCeOiMap.put(o.getStrikePrice(), o.getCeOi());
+                    if (o.getPeOi() != null) lastPeOiMap.put(o.getStrikePrice(), o.getPeOi());
+                    seeded++;
+                }
+                log.info("Seeded OI baselines from {} stored strikes (snapshot {}).", seeded, latest);
+            }
+        } catch (Exception e) {
+            log.warn("Could not seed OI baselines from DB: {}", e.getMessage());
+        }
+        oiBaselineSeeded = true;
+    }
+
     @Override
     public List<OptionSnapshotDto> fetchOptionChain() {
         ensureAuthenticated();
-        
+
         if ("SIMULATED_JWT_TOKEN".equals(jwtToken)) {
             return getSimulatedFallbackOptions();
         }
+
+        seedOiBaselineIfNeeded();
 
         try {
             double spot = fetchMarketData().niftySpot();
@@ -286,7 +333,8 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
             List<String> optionSymbols = new ArrayList<>();
             Map<String, Integer> strikeSymbolMap = new HashMap<>();
 
-            for (int i = -10; i <= 10; i++) {
+            // ±20 strikes (±1000 points) around ATM, like the NSE option chain view.
+            for (int i = -20; i <= 20; i++) {
                 int strike = atmStrike + (i * 50);
                 String ceSymbol = "NIFTY" + expiryDateSymbolStr + strike + "CE";
                 String peSymbol = "NIFTY" + expiryDateSymbolStr + strike + "PE";
@@ -307,32 +355,10 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
                 return getSimulatedFallbackOptions();
             }
 
-            Map<String, Object> request = new HashMap<>();
-            request.put("mode", "FULL");
-            Map<String, List<String>> exchangeTokens = new HashMap<>();
-            exchangeTokens.put("NFO", tokens);
-            request.put("exchangeTokens", exchangeTokens);
+            // Angel One caps a FULL quote at ~50 tokens/request, so fetch in batches and merge.
+            List<Map<String, Object>> fetched = fetchFullQuoteNfo(tokens);
 
-            Map<String, Object> response = webClientBuilder.build().post()
-                    .uri("https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote/")
-                    .header("Authorization", "Bearer " + jwtToken)
-                    .header("Content-Type", "application/json")
-                    .header("Accept", "application/json")
-                    .header("X-UserType", "USER")
-                    .header("X-SourceID", "WEB")
-                    .header("X-ClientLocalIP", "192.168.1.100")
-                    .header("X-ClientPublicIP", "192.168.1.100")
-                    .header("X-MACAddress", "02:00:00:00:00:00")
-                    .header("X-PrivateKey", apiKey)
-                    .bodyValue(request)
-                    .retrieve()
-                    .bodyToMono(Map.class)
-                    .block();
-
-            if (response != null && Boolean.TRUE.equals(response.get("status"))) {
-                Map<String, Object> data = (Map<String, Object>) response.get("data");
-                List<Map<String, Object>> fetched = (List<Map<String, Object>>) data.get("fetched");
-
+            if (!fetched.isEmpty()) {
                 Map<Integer, OptionSnapshotDtoBuilder> builders = new HashMap<>();
                 for (Map<String, Object> quote : fetched) {
                     String symbol = (String) quote.get("tradingSymbol");
@@ -351,25 +377,33 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
                         volume = parseLong(quote.get("tradeVolume"));
                     }
 
+                    double ltp = parseDouble(quote.get("ltp"));
+
                     if (isCe) {
                         builder.ceOi = oi;
                         long lastCeOi = lastCeOiMap.getOrDefault(strike, 0L);
                         builder.ceOiChange = lastCeOi > 0 ? (oi - lastCeOi) : 0L;
                         lastCeOiMap.put(strike, oi);
-                        builder.ceIv = 12.5;
                         builder.ceVolume = volume;
+                        builder.ceLtp = ltp;
                     } else {
                         builder.peOi = oi;
                         long lastPeOi = lastPeOiMap.getOrDefault(strike, 0L);
                         builder.peOiChange = lastPeOi > 0 ? (oi - lastPeOi) : 0L;
                         lastPeOiMap.put(strike, oi);
-                        builder.peIv = 12.5;
                         builder.peVolume = volume;
+                        builder.peLtp = ltp;
                     }
                 }
 
+                // Time to the current weekly expiry (for IV inversion).
+                double years = Math.max(0,
+                        java.time.temporal.ChronoUnit.DAYS.between(
+                                com.nifty.analysis.util.TimeUtil.todayIst(),
+                                findNextThursday(com.nifty.analysis.util.TimeUtil.todayIst()))) / 365.0;
+
                 List<OptionSnapshotDto> snapshots = new ArrayList<>();
-                LocalDateTime now = LocalDateTime.now();
+                LocalDateTime now = com.nifty.analysis.util.TimeUtil.nowIst();
                 for (OptionSnapshotDtoBuilder b : builders.values()) {
                     double pcr = b.ceOi > 0 ? (double) b.peOi / b.ceOi : 0.0;
                     snapshots.add(new OptionSnapshotDto(
@@ -378,7 +412,7 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
                         b.peOi,
                         b.ceOiChange,
                         b.peOiChange,
-                        12.5,
+                        solveStrikeIv(spot, b.strike, years, b.ceLtp, b.peLtp),
                         Math.round(pcr * 100.0) / 100.0,
                         (double) atmStrike,
                         b.ceVolume,
@@ -394,14 +428,75 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
         return getSimulatedFallbackOptions();
     }
 
+    /** Fetches a FULL quote for NFO tokens in batches of 50 (Angel One's per-request cap), merged. */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> fetchFullQuoteNfo(List<String> tokens) {
+        List<Map<String, Object>> merged = new ArrayList<>();
+        final int batch = 50;
+        for (int start = 0; start < tokens.size(); start += batch) {
+            List<String> chunk = tokens.subList(start, Math.min(start + batch, tokens.size()));
+            try {
+                Map<String, Object> request = new HashMap<>();
+                request.put("mode", "FULL");
+                Map<String, List<String>> exchangeTokens = new HashMap<>();
+                exchangeTokens.put("NFO", new ArrayList<>(chunk));
+                request.put("exchangeTokens", exchangeTokens);
+
+                Map<String, Object> response = webClientBuilder.build().post()
+                        .uri("https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote/")
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .header("Content-Type", "application/json")
+                        .header("Accept", "application/json")
+                        .header("X-UserType", "USER")
+                        .header("X-SourceID", "WEB")
+                        .header("X-ClientLocalIP", "192.168.1.100")
+                        .header("X-ClientPublicIP", "192.168.1.100")
+                        .header("X-MACAddress", "02:00:00:00:00:00")
+                        .header("X-PrivateKey", apiKey)
+                        .bodyValue(request)
+                        .retrieve()
+                        .bodyToMono(Map.class)
+                        .block();
+
+                if (response != null && Boolean.TRUE.equals(response.get("status"))) {
+                    Map<String, Object> data = (Map<String, Object>) response.get("data");
+                    List<Map<String, Object>> fetched = (List<Map<String, Object>>) data.get("fetched");
+                    if (fetched != null) {
+                        merged.addAll(fetched);
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("Option quote batch failed ({} tokens): {}", chunk.size(), e.getMessage());
+            }
+        }
+        return merged;
+    }
+
+    /**
+     * Backs out a single per-strike IV (percent) from the live CE/PE premiums via the
+     * Black-Scholes solver, averaging the two sides when both solve. Falls back to 12.5 if
+     * the solver is unavailable or the premiums can't be inverted (strictly non-regressive).
+     */
+    private double solveStrikeIv(double spot, int strike, double years, double ceLtp, double peLtp) {
+        if (blackScholesService == null) {
+            return 12.5;
+        }
+        double ceIv = blackScholesService.impliedVol(spot, strike, years, true, ceLtp);
+        double peIv = blackScholesService.impliedVol(spot, strike, years, false, peLtp);
+        if (ceIv > 0 && peIv > 0) return Math.round((ceIv + peIv) / 2.0 * 100.0) / 100.0;
+        if (ceIv > 0) return ceIv;
+        if (peIv > 0) return peIv;
+        return 12.5;
+    }
+
     private static class OptionSnapshotDtoBuilder {
         int strike;
         long ceOi;
         long peOi;
         long ceOiChange;
         long peOiChange;
-        double ceIv;
-        double peIv;
+        double ceLtp;
+        double peLtp;
         long ceVolume;
         long peVolume;
 
@@ -411,7 +506,29 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
     }
 
     private String findCurrentMonthFutureSymbol() {
-        LocalDate today = LocalDate.now();
+        LocalDate today = com.nifty.analysis.util.TimeUtil.todayIst();
+
+        // Prefer scanning the scrip master for the nearest non-expired NIFTY future. This is
+        // format-agnostic, so a wrong futures value (token never resolving) is avoided even if
+        // Angel One's symbol format differs from the computed one.
+        String best = null;
+        LocalDate bestExpiry = null;
+        for (ScripInfo info : scripMap.values()) {
+            String sym = info.symbol();
+            if (sym == null || !sym.startsWith("NIFTY") || !sym.endsWith("FUT")) {
+                continue;
+            }
+            LocalDate exp = parseScripExpiry(info.expiry());
+            if (exp != null && !exp.isBefore(today) && (bestExpiry == null || exp.isBefore(bestExpiry))) {
+                bestExpiry = exp;
+                best = sym;
+            }
+        }
+        if (best != null) {
+            return best;
+        }
+
+        // Fallback: compute the conventional last-Thursday monthly symbol.
         LocalDate lastThursday = findLastThursdayOfMonth(today);
         if (today.isAfter(lastThursday)) {
             lastThursday = findLastThursdayOfMonth(today.plusMonths(1));
@@ -420,10 +537,26 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
         return "NIFTY" + formatted + "FUT";
     }
 
+    /** Parses an Angel One scrip-master expiry string (e.g. "26JUN2026") to a date; null if unparseable. */
+    private LocalDate parseScripExpiry(String expiry) {
+        if (expiry == null || expiry.isBlank()) {
+            return null;
+        }
+        for (String pattern : new String[]{"ddMMMyyyy", "ddMMMyy", "dd-MMM-yyyy"}) {
+            try {
+                return LocalDate.parse(expiry.toUpperCase(),
+                        DateTimeFormatter.ofPattern(pattern, Locale.ENGLISH));
+            } catch (Exception ignored) {
+                // try next pattern
+            }
+        }
+        return null;
+    }
+
     private String findCurrentOptionExpiryDateSymbolStr() {
-        LocalDate today = LocalDate.now();
+        LocalDate today = com.nifty.analysis.util.TimeUtil.todayIst();
         LocalDate nextThursday = findNextThursday(today);
-        if (today.getDayOfWeek() == java.time.DayOfWeek.THURSDAY && LocalDateTime.now().getHour() >= 16) {
+        if (today.getDayOfWeek() == java.time.DayOfWeek.THURSDAY && com.nifty.analysis.util.TimeUtil.nowIst().getHour() >= 16) {
             nextThursday = findNextThursday(today.plusDays(1));
         }
         return nextThursday.format(DateTimeFormatter.ofPattern("ddMMMyy").withLocale(Locale.ENGLISH)).toUpperCase();
@@ -467,15 +600,15 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
     private MarketSnapshotDto getSimulatedFallbackMarketData() {
         dataFeedStatus.update(false); // degraded — every caller of this is on simulated data
         double spot = 23500.0 + (new Random().nextDouble() - 0.5) * 10.0;
-        return new MarketSnapshotDto(spot, spot + 30.0, 13.5, 500000.0, LocalDateTime.now());
+        return new MarketSnapshotDto(spot, spot + 30.0, 13.5, 500000.0, com.nifty.analysis.util.TimeUtil.nowIst());
     }
 
     private List<OptionSnapshotDto> getSimulatedFallbackOptions() {
         List<OptionSnapshotDto> list = new ArrayList<>();
         double spot = 23500.0;
         int atmStrike = 23500;
-        LocalDateTime now = LocalDateTime.now();
-        for (int i = -10; i <= 10; i++) {
+        LocalDateTime now = com.nifty.analysis.util.TimeUtil.nowIst();
+        for (int i = -20; i <= 20; i++) {
             int strike = atmStrike + (i * 50);
             list.add(new OptionSnapshotDto(strike, 1000000L, 1100000L, 5000L, 10000L, 12.5, 1.1, (double) atmStrike, 150000L, 160000L, now));
         }
@@ -551,12 +684,12 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
     /** A streamable option contract (NFO) with its strike + type, for SnapQuote streaming. */
     public record OptionStreamInstrument(String token, int strike, String optionType) {}
 
-    /** CE/PE tokens around ATM (±10 strikes) given the current spot, for live OI streaming. */
+    /** CE/PE tokens around ATM (±20 strikes) given the current spot, for live OI streaming. */
     public java.util.List<OptionStreamInstrument> getOptionStreamInstruments(double spot) {
         java.util.List<OptionStreamInstrument> list = new ArrayList<>();
         int atm = ((int) Math.round(spot / 50.0)) * 50;
         String expiry = findCurrentOptionExpiryDateSymbolStr();
-        for (int i = -10; i <= 10; i++) {
+        for (int i = -20; i <= 20; i++) {
             int strike = atm + i * 50;
             for (String type : new String[]{"CE", "PE"}) {
                 String sym = "NIFTY" + expiry + strike + type;

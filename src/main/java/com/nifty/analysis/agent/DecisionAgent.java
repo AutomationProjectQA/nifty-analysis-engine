@@ -75,6 +75,13 @@ public class DecisionAgent {
     @Value("${nifty.timing.session-filter-enabled:true}")
     private boolean sessionFilterEnabled;
 
+    // Aggregate exposure cap: max simultaneously-open (ACTIVE) positions across all ladders.
+    @Value("${nifty.risk.max-concurrent-positions:6}")
+    private int maxConcurrentPositions;
+
+    // Cached once enough snapshot history exists, to avoid counting a growing table each cycle.
+    private volatile boolean historySufficient = false;
+
     private final ConfidenceEngine confidenceEngine;
     private final CriticAgent criticAgent;
     private final TechnicalAgent technicalAgent;
@@ -194,8 +201,12 @@ public class DecisionAgent {
         // once it is loaded AND enough history exists for its features to be meaningful.
         // Otherwise we fall back to the rule-based agent score to avoid the cold-start
         // problem where the model returns a flat ~50% and blocks every single trade.
-        long snapshotCount = marketSnapshotRepository.count();
-        boolean modelReady = onnxModelService.isModelLoaded() && snapshotCount >= modelMinHistory;
+        // Once enough history exists it never drops below the threshold, so stop counting
+        // the (growing) table every cycle.
+        if (!historySufficient && marketSnapshotRepository.count() >= modelMinHistory) {
+            historySufficient = true;
+        }
+        boolean modelReady = onnxModelService.isModelLoaded() && historySufficient;
         double rawConfidence;
         if (modelReady) {
             rawConfidence = (modelWeight * modelConfidence) + ((1.0 - modelWeight) * agentConfidence);
@@ -205,8 +216,8 @@ public class DecisionAgent {
                     Math.round(rawConfidence * 100.0) / 100.0, isBullish ? "BULLISH" : "BEARISH");
         } else {
             rawConfidence = agentConfidence;
-            log.info("ONNX model not ready (loaded={}, snapshots={}/{}). Using rule-based agent confidence: {}% (Direction: {})",
-                    onnxModelService.isModelLoaded(), snapshotCount, modelMinHistory,
+            log.info("ONNX model not ready (loaded={}, history-sufficient={}). Using rule-based agent confidence: {}% (Direction: {})",
+                    onnxModelService.isModelLoaded(), historySufficient,
                     Math.round(agentConfidence * 100.0) / 100.0, isBullish ? "BULLISH" : "BEARISH");
         }
         rawConfidence = Math.round(rawConfidence * 100.0) / 100.0;
@@ -240,10 +251,11 @@ public class DecisionAgent {
         List<Integer> candidateStrikes = buildCandidateStrikes(atmStrike, isBullish);
         int emitted = 0;
         double vix = latest.getIndiaVix();
+        int ladderLegs = candidateStrikes.size();
         for (int strike : candidateStrikes) {
             if (emitSignalForStrike(strike, signalType, isBullish, spotPrice, finalConfidence,
                     modelConfidence, agentConfidence, rawConfidence, modelReady, rawResult, criticResult,
-                    optionChainEntities, thesis, vix)) {
+                    optionChainEntities, thesis, vix, ladderLegs)) {
                 emitted++;
             }
         }
@@ -265,7 +277,15 @@ public class DecisionAgent {
     private boolean emitSignalForStrike(int strike, String signalType, boolean isBullish, double spotPrice,
             double finalConfidence, double modelConfidence, double agentConfidence, double rawConfidence,
             boolean modelReady, ConfidenceEngine.RawConfidenceResult rawResult, CriticAgent.CriticResult criticResult,
-            List<OptionSnapshot> optionChainEntities, String thesis, double vix) {
+            List<OptionSnapshot> optionChainEntities, String thesis, double vix, int splitAcross) {
+
+        // Aggregate exposure cap: stop opening new positions once the max are already open.
+        long openPositions = tradeSignalRepository.countByStatus("ACTIVE");
+        if (openPositions >= maxConcurrentPositions) {
+            log.info("Max concurrent positions reached ({}/{}). Skipping strike {}.",
+                    openPositions, maxConcurrentPositions, strike);
+            return false;
+        }
 
         // Per-strike duplicate guard
         if (tradeSignalRepository.findFirstByStrikeAndSignalTypeAndStatus(strike, signalType, "ACTIVE").isPresent()) {
@@ -296,7 +316,7 @@ public class DecisionAgent {
         double target1 = round2(entry * (1.0 + targetProfitPercent / 200.0));
         double target2 = round2(entry * (1.0 + targetProfitPercent / 100.0));
         double stopLoss = round2(entry * (1.0 - stopLossPercent / 100.0));
-        int quantity = orderExecutionService.calculateQuantity(entry);
+        int quantity = orderExecutionService.calculateQuantity(entry, splitAcross);
 
         // Risk assessment (advisory): evaluate R:R + volatility risk. Surfaced/logged for
         // every signal — NOT a hard block (the configured 2% target / 40% stop intentionally
@@ -307,8 +327,18 @@ public class DecisionAgent {
                     round2(risk.score()), String.join("; ", risk.comments()));
         }
 
+        // Place the order FIRST, then only persist an ACTIVE signal if it actually went
+        // through (PLACED) or is an intentional paper/simulated trade (SKIPPED). A FAILED
+        // live order must NOT leave a phantom ACTIVE position with no real fill behind it.
+        OrderExecutionService.OrderResult order =
+                orderExecutionService.executeOrder(signalType, strike, spotPrice, splitAcross);
+        if (order.outcome() == OrderExecutionService.OrderResult.Outcome.FAILED) {
+            log.warn("Order FAILED for {} {} — not creating a phantom ACTIVE signal.", signalType, strike);
+            return false;
+        }
+
         TradeSignal signal = new TradeSignal();
-        signal.setSignalTime(LocalDateTime.now());
+        signal.setSignalTime(com.nifty.analysis.util.TimeUtil.nowIst());
         signal.setSignalType(signalType);
         signal.setStrike(strike);
         signal.setEntry(round2(entry));
@@ -319,6 +349,8 @@ public class DecisionAgent {
         signal.setConfidence(finalConfidence);
         signal.setStatus("ACTIVE");
         signal.setThesis(thesis);
+        signal.setOrderId(order.orderId()); // broker order id when PLACED; null for paper
+        signal.setEntrySpot(round2(spotPrice)); // capture entry spot instead of reconstructing later
         tradeSignalRepository.save(signal);
 
         // Explanations: provenance + factor scores + critic penalties + liquidity.
@@ -360,9 +392,6 @@ public class DecisionAgent {
             reasons.add("Critic Penalty: " + p.comment());
         }
         telegramBotService.sendSignal(signal, reasons);
-
-        // Execute Order via Angel One
-        orderExecutionService.executeOrder(signalType, strike, spotPrice);
         return true;
     }
 

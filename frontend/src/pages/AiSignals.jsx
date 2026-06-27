@@ -51,6 +51,30 @@ const mockSignals = [
   }
 ];
 
+// Coerce numeric fields and require an id, so a malformed signal can't crash the card
+// (`.toFixed()` on null, NaN confidence meter, undefined React key).
+const sanitizeSignals = (rows) =>
+  (rows || [])
+    .filter((s) => s && s.id != null)
+    .map((s) => ({
+      ...s,
+      entry: Number(s.entry) || 0,
+      target1: Number(s.target1) || 0,
+      target2: Number(s.target2) || 0,
+      stopLoss: Number(s.stopLoss) || 0,
+      confidence: Number(s.confidence) || 0,
+    }));
+
+// Safe short date/time from a possibly-missing/invalid signalTime.
+const fmtSignalTime = (value) => {
+  const d = value ? new Date(value) : null;
+  if (!d || isNaN(d.getTime())) return { dateString: '—', timeString: '' };
+  return {
+    timeString: d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+    dateString: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+  };
+};
+
 const AiSignals = () => {
   const [signals, setSignals] = useState(mockSignals);
   const [activeTab, setActiveTab] = useState('ALL'); // ALL, ACTIVE, EXPIRED
@@ -59,7 +83,7 @@ const AiSignals = () => {
   const fetchSignals = async () => {
     try {
       const response = await api.get('/api/v1/signals');
-      setSignals(response.data || []); // trust backend even when empty (genuine "no signals yet")
+      setSignals(sanitizeSignals(response.data)); // trust backend even when empty (genuine "no signals yet")
       setLive(true);
     } catch (e) {
       console.warn("Backend down, showing simulated option signals.", e.message);
@@ -71,7 +95,7 @@ const AiSignals = () => {
     fetchSignals(); // initial paint via REST
     // Live updates pushed over WebSocket — no more polling.
     const unsub = subscribe('/topic/signals', (data) => {
-      setSignals(data || []);
+      setSignals(sanitizeSignals(data));
       setLive(true);
     });
     return unsub;
@@ -90,7 +114,7 @@ const AiSignals = () => {
 
   const filteredSignals = signals.filter(s => {
     if (activeTab === 'ACTIVE') return s.status === 'ACTIVE';
-    if (activeTab === 'EXPIRED') return s.status !== 'ACTIVE';
+    if (activeTab === 'CLOSED') return s.status !== 'ACTIVE';
     return true;
   });
 
@@ -98,7 +122,7 @@ const AiSignals = () => {
   const tabCounts = {
     ALL: signals.length,
     ACTIVE: signals.filter(s => s.status === 'ACTIVE').length,
-    EXPIRED: signals.filter(s => s.status !== 'ACTIVE').length,
+    CLOSED: signals.filter(s => s.status !== 'ACTIVE').length,
   };
 
   return (
@@ -115,7 +139,7 @@ const AiSignals = () => {
 
       {/* Tabs / Filters */}
       <Box sx={{ display: 'flex', gap: 2, mb: 4, flexWrap: 'wrap' }}>
-        {['ALL', 'ACTIVE', 'EXPIRED'].map((tab) => (
+        {['ALL', 'ACTIVE', 'CLOSED'].map((tab) => (
           <Button
             key={tab}
             variant={activeTab === tab ? 'contained' : 'outlined'}
@@ -149,8 +173,7 @@ const AiSignals = () => {
         {filteredSignals.map((sig) => {
           const isCe = sig.signalType === 'BUY_CE';
           const statColor = getStatusColor(sig.status);
-          const timeString = new Date(sig.signalTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-          const dateString = new Date(sig.signalTime).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          const { timeString, dateString } = fmtSignalTime(sig.signalTime);
 
           return (
             <Grid key={sig.id} size={{ xs: 12, md: 6 }}>

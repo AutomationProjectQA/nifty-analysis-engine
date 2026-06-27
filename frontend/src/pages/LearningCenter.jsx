@@ -5,6 +5,8 @@ import ReactMarkdown from 'react-markdown';
 import SchoolIcon from '@mui/icons-material/School';
 import SearchIcon from '@mui/icons-material/Search';
 import SearchOffIcon from '@mui/icons-material/SearchOff';
+import DescriptionIcon from '@mui/icons-material/Description';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import api from '../api/client';
 
 import AdSenseSlot from '../components/AdSenseSlot';
@@ -38,7 +40,7 @@ By looking at price changes alongside changes in Open Interest, traders can dete
     content: `The Put-Call Ratio (PCR) is a popular technical sentiment indicator used by traders to measure overall market positioning. It is calculated by dividing the total volume or open interest of Put options by the total volume or open interest of Call options.
 
 ### How to Calculate PCR
-$$\\text{PCR (OI)} = \\frac{\\text{Total PE Open Interest}}{\\text{Total CE Open Interest}}$$
+**PCR (OI) = Total PE Open Interest ÷ Total CE Open Interest**
 
 ### How to Interpret PCR Values
 - **PCR > 1.10 (Bullish Sentiment):** High PCR values indicate that traders are writing more Puts than Calls. This serves as a bullish indicator, suggesting that market participants expect price support levels to hold.
@@ -74,6 +76,7 @@ Traders watch the Max Pain strike as a strong magnet on expiry days. If Nifty sp
 const LearningCenter = () => {
   const [articles, setArticles] = useState(mockArticles);
   const [loading, setLoading] = useState(true);
+  const [demo, setDemo] = useState(false); // true => showing built-in sample content, not the live library
   const [search, setSearch] = useState('');
   const [selectedArticle, setSelectedArticle] = useState(null);
   const [activeCategory, setActiveCategory] = useState('ALL');
@@ -84,9 +87,13 @@ const LearningCenter = () => {
       const response = await api.get('/api/v1/learning/articles');
       if (response.data && response.data.length > 0) {
         setArticles(response.data);
+        setDemo(false);
+      } else {
+        setDemo(true); // backend reachable but empty → still showing samples
       }
     } catch (e) {
       console.warn("Backend down, showing simulated articles.", e.message);
+      setDemo(true);
     } finally {
       setLoading(false);
     }
@@ -107,74 +114,103 @@ const LearningCenter = () => {
 
   return (
     <Box sx={{ flexGrow: 1 }}>
-      <Typography variant="h4" sx={{ fontFamily: 'Outfit, sans-serif', fontWeight: 700, mb: 3, display: 'flex', alignItems: 'center', gap: 1 }}>
+      <Typography variant="h4" sx={{ fontFamily: 'Outfit, sans-serif', fontWeight: 700, mb: 3, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
         <SchoolIcon sx={{ fontSize: 35, color: 'primary.main' }} />
         Option Learning Center
+        {demo && (
+          <Chip label="Sample content" size="small"
+            sx={{ ml: 1, bgcolor: 'rgba(255,159,10,0.12)', color: '#ff9f0a', border: '1px solid rgba(255,159,10,0.3)', fontWeight: 600 }} />
+        )}
       </Typography>
 
-      {/* Search and Filters Bar */}
-      <Box sx={{ display: 'flex', gap: 2, mb: 4, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
-        <TextField
-          placeholder="Search articles..."
-          size="small"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          slotProps={{
-            input: {
-              startAdornment: <SearchIcon sx={{ color: 'text.secondary', mr: 1 }} />
-            }
-          }}
-          sx={{ width: { xs: '100%', sm: 300 }, bgcolor: 'background.paper', borderRadius: 1 }}
-        />
-        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-          {categories.map((cat) => (
-            <Chip
-              key={cat}
-              label={cat}
-              onClick={() => setActiveCategory(cat)}
-              sx={{
-                fontWeight: 600,
-                cursor: 'pointer',
-                bgcolor: activeCategory === cat ? 'primary.main' : 'background.paper',
-                color: activeCategory === cat ? 'background.default' : 'text.secondary',
-                '&:hover': { bgcolor: activeCategory === cat ? 'primary.main' : 'action.hover' }
-              }}
-            />
-          ))}
-        </Box>
-      </Box>
-
-      {/* Grid of Articles */}
-      {loading ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', p: 8 }}><CircularProgress /></Box>
-      ) : filteredArticles.length === 0 ? (
-        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5, py: 8, color: 'text.secondary' }}>
-          <SearchOffIcon sx={{ fontSize: 48, color: 'text.disabled' }} />
-          <Typography variant="body1">No guides match your search.</Typography>
-          {(search || activeCategory !== 'ALL') && (
-            <Button variant="text" onClick={() => { setSearch(''); setActiveCategory('ALL'); }}>Clear filters</Button>
-          )}
-        </Box>
-      ) : (
-        <Grid container spacing={3}>
-          {filteredArticles.map((art) => (
-            <Grid key={art.slug} size={{ xs: 12, sm: 6, md: 4 }}>
-              <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                <CardContent>
-                  <Chip label={art.category} size="small" sx={{ mb: 2, bgcolor: 'action.hover', fontWeight: 600, color: 'primary.main' }} />
-                  <Typography variant="h6" sx={{ fontWeight: 700, mb: 1.5, fontFamily: 'Outfit, sans-serif' }}>{art.title}</Typography>
-                  <Typography variant="body2" sx={{ color: 'text.secondary', mb: 2, lineHeight: 1.5 }}>{art.summary}</Typography>
-                </CardContent>
-                <Box sx={{ p: 2, pt: 0 }}>
-                  <Button variant="outlined" fullWidth onClick={() => setSelectedArticle(art)}>
-                    Read Guide
-                  </Button>
-                </Box>
-              </Card>
-            </Grid>
-          ))}
+      <Grid container spacing={3}>
+        {/* LEFT: category sidebar (document-portal style) */}
+        <Grid size={{ xs: 12, md: 3 }}>
+          <Card sx={{ position: { md: 'sticky' }, top: 88 }}>
+            <CardContent sx={{ p: 1.5 }}>
+              <Typography variant="overline" sx={{ px: 1, color: 'text.secondary', fontWeight: 700 }}>
+                Categories
+              </Typography>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mt: 1 }}>
+                {categories.map((cat) => {
+                  const count = cat === 'ALL' ? articles.length : articles.filter((a) => a.category === cat).length;
+                  const active = activeCategory === cat;
+                  return (
+                    <Box key={cat} onClick={() => setActiveCategory(cat)}
+                      sx={{
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        px: 1.5, py: 1, borderRadius: 2, cursor: 'pointer',
+                        bgcolor: active ? 'primary.light' : 'transparent',
+                        color: active ? 'primary.dark' : 'text.secondary',
+                        '&:hover': { bgcolor: active ? 'primary.light' : 'action.hover' },
+                      }}>
+                      <Typography variant="body2" sx={{ fontWeight: active ? 700 : 500 }}>
+                        {cat === 'ALL' ? 'All Guides' : cat}
+                      </Typography>
+                      <Chip label={count} size="small" sx={{ height: 20, bgcolor: 'action.hover', color: 'text.secondary', fontWeight: 600 }} />
+                    </Box>
+                  );
+                })}
+              </Box>
+            </CardContent>
+          </Card>
         </Grid>
-      )}
+
+        {/* RIGHT: search + document list */}
+        <Grid size={{ xs: 12, md: 9 }}>
+          <TextField
+            fullWidth
+            placeholder="Search guides…"
+            size="small"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            slotProps={{ input: { startAdornment: <SearchIcon sx={{ color: 'text.secondary', mr: 1 }} /> } }}
+            sx={{ mb: 3, bgcolor: 'background.paper', borderRadius: 1 }}
+          />
+
+          {loading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', p: 8 }}><CircularProgress /></Box>
+          ) : filteredArticles.length === 0 ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5, py: 8, color: 'text.secondary' }}>
+              <SearchOffIcon sx={{ fontSize: 48, color: 'text.disabled' }} />
+              <Typography variant="body1">No guides match your search.</Typography>
+              {(search || activeCategory !== 'ALL') && (
+                <Button variant="text" onClick={() => { setSearch(''); setActiveCategory('ALL'); }}>Clear filters</Button>
+              )}
+            </Box>
+          ) : (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <Typography variant="body2" sx={{ color: 'text.secondary', mb: 0.5 }}>
+                {filteredArticles.length} guide{filteredArticles.length === 1 ? '' : 's'}
+                {activeCategory !== 'ALL' ? ` in ${activeCategory}` : ''}
+              </Typography>
+              {filteredArticles.map((art) => (
+                <Card key={art.slug} onClick={() => setSelectedArticle(art)}
+                  sx={{
+                    cursor: 'pointer', transition: 'border-color .15s, box-shadow .15s',
+                    '&:hover': { borderColor: 'primary.main', boxShadow: '0 4px 14px rgba(16,24,40,0.06)' },
+                  }}>
+                  <CardContent sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
+                    <Box sx={{ width: 44, height: 44, borderRadius: 2, bgcolor: 'primary.light', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      <DescriptionIcon sx={{ color: 'primary.main' }} />
+                    </Box>
+                    <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5, flexWrap: 'wrap' }}>
+                        <Typography variant="h6" sx={{ fontWeight: 700, fontFamily: 'Outfit, sans-serif', fontSize: '1.05rem' }}>
+                          {art.title}
+                        </Typography>
+                        <Chip label={art.category} size="small" sx={{ height: 20, bgcolor: 'action.hover', color: 'primary.main', fontWeight: 600 }} />
+                      </Box>
+                      <Typography variant="body2" sx={{ color: 'text.secondary', lineHeight: 1.5 }}>{art.summary}</Typography>
+                    </Box>
+                    <ChevronRightIcon sx={{ color: 'text.disabled', alignSelf: 'center' }} />
+                  </CardContent>
+                </Card>
+              ))}
+            </Box>
+          )}
+        </Grid>
+      </Grid>
 
       {/* Dialog for Reading Article */}
       <Dialog 
@@ -197,6 +233,7 @@ const LearningCenter = () => {
 
               <Box className="markdown-report-body" sx={{
                 color: 'text.primary',
+                '& h1, & h2': { fontFamily: 'Outfit, sans-serif', fontSize: '1.35rem', fontWeight: 700, mt: 3, mb: 1.5, color: 'text.primary' },
                 '& h3': { fontFamily: 'Outfit, sans-serif', fontSize: '1.2rem', fontWeight: 700, mt: 3, mb: 1.5, color: 'primary.main' },
                 '& h4': { fontSize: '1.05rem', fontWeight: 600, mt: 2.5, mb: 1, color: 'text.primary' },
                 '& p': { mb: 2, lineHeight: 1.6, color: 'text.secondary' },

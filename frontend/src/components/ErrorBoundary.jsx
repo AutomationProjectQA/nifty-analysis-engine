@@ -34,7 +34,10 @@ class ErrorBoundary extends React.Component {
             Something went wrong on this page.
           </Typography>
           <Typography variant="body2" sx={{ color: 'text.secondary', mb: 3 }}>
-            {this.state.error?.message || 'An unexpected error occurred.'}
+            {/* Show the raw error only in dev; users get a friendly message in prod. */}
+            {import.meta.env.DEV
+              ? (this.state.error?.message || 'An unexpected error occurred.')
+              : 'Please try again, or refresh the page if it persists.'}
           </Typography>
           <Button variant="contained" onClick={() => this.setState({ hasError: false, error: null })}>
             Try again

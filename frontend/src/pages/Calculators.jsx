@@ -4,6 +4,13 @@ import Grid from '@mui/material/Grid';
 
 import AdSenseSlot from '../components/AdSenseSlot';
 
+// Coerce an input value to a non-negative, finite number (empty/partial/negative → 0),
+// so a cleared or half-typed field never produces NaN/Infinity/negative results.
+const num = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+};
+
 const Calculators = () => {
   const [activeTab, setActiveTab] = useState(0);
 
@@ -36,9 +43,9 @@ const Calculators = () => {
   const optProfitValue = (optExit - optPremium) * optLots * 65;
   const optRoi = optPremium > 0 ? ((optExit - optPremium) / optPremium) * 100 : 0;
 
-  // Position sizing
+  // Position sizing (guard against stopPoints = 0 → Infinity lots)
   const maxRiskCash = (capTotal * capRiskPct) / 100;
-  const maxLots = Math.floor(maxRiskCash / (stopPoints * 65));
+  const maxLots = stopPoints > 0 ? Math.floor(maxRiskCash / (stopPoints * 65)) : 0;
   const reqCapital = maxLots > 0 ? maxLots * 65 * optionPrice : 0;
 
   // Risk reward calculations
@@ -99,12 +106,12 @@ const Calculators = () => {
                 
                 <Box sx={{ mb: 3 }}>
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 600 }}>Buy Premium Price (INR)</Typography>
-                  <TextField type="number" fullWidth value={optPremium} onChange={(e) => setOptPremium(Number(e.target.value))} size="small" />
+                  <TextField type="number" fullWidth value={optPremium} onChange={(e) => setOptPremium(num(e.target.value))} size="small" />
                 </Box>
                 
                 <Box sx={{ mb: 3 }}>
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 600 }}>Estimated Exit Price (INR)</Typography>
-                  <TextField type="number" fullWidth value={optExit} onChange={(e) => setOptExit(Number(e.target.value))} size="small" />
+                  <TextField type="number" fullWidth value={optExit} onChange={(e) => setOptExit(num(e.target.value))} size="small" />
                 </Box>
 
                 <Box sx={{ mb: 3 }}>
@@ -117,7 +124,7 @@ const Calculators = () => {
               </Grid>
 
               <Grid size={{ xs: 12, md: 6 }} sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', bgcolor: '#f7f8fc', p: 3, borderRadius: 2, border: '1px solid #e9eaf2' }}>
-                <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600, textAlign: 'center' }}>ESTIMATED NET PNL</Typography>
+                <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600, textAlign: 'center' }}>ESTIMATED GROSS P&amp;L (before costs)</Typography>
                 <Typography variant="h3" sx={{ fontWeight: 700, textAlign: 'center', mt: 1, mb: 1, fontFamily: 'Outfit, sans-serif', color: optProfitValue >= 0 ? '#26a69a' : '#ef5350' }}>
                   {optProfitValue >= 0 ? '+' : ''}{optProfitValue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                 </Typography>
@@ -140,7 +147,7 @@ const Calculators = () => {
                 
                 <Box sx={{ mb: 3 }}>
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 600 }}>Total Wallet Capital (₹)</Typography>
-                  <TextField type="number" fullWidth value={capTotal} onChange={(e) => setCapTotal(Number(e.target.value))} size="small" />
+                  <TextField type="number" fullWidth value={capTotal} onChange={(e) => setCapTotal(num(e.target.value))} size="small" />
                 </Box>
                 
                 <Box sx={{ mb: 3 }}>
@@ -153,12 +160,12 @@ const Calculators = () => {
 
                 <Box sx={{ mb: 3 }}>
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 600 }}>Option Stop Loss Points</Typography>
-                  <TextField type="number" fullWidth value={stopPoints} onChange={(e) => setStopPoints(Number(e.target.value))} size="small" />
+                  <TextField type="number" fullWidth value={stopPoints} onChange={(e) => setStopPoints(num(e.target.value))} size="small" />
                 </Box>
 
                 <Box sx={{ mb: 3 }}>
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 600 }}>Entry Option Premium Price (₹)</Typography>
-                  <TextField type="number" fullWidth value={optionPrice} onChange={(e) => setOptionPrice(Number(e.target.value))} size="small" />
+                  <TextField type="number" fullWidth value={optionPrice} onChange={(e) => setOptionPrice(num(e.target.value))} size="small" />
                 </Box>
               </Grid>
 
@@ -188,32 +195,41 @@ const Calculators = () => {
                 
                 <Box sx={{ mb: 3 }}>
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 600 }}>Entry Buy Price (₹)</Typography>
-                  <TextField type="number" fullWidth value={entryPrice} onChange={(e) => setEntryPrice(Number(e.target.value))} size="small" />
+                  <TextField type="number" fullWidth value={entryPrice} onChange={(e) => setEntryPrice(num(e.target.value))} size="small" />
                 </Box>
 
                 <Box sx={{ mb: 3 }}>
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 600 }}>Stop Loss Exit Price (₹)</Typography>
-                  <TextField type="number" fullWidth value={slPrice} onChange={(e) => setSlPrice(Number(e.target.value))} size="small" />
+                  <TextField type="number" fullWidth value={slPrice} onChange={(e) => setSlPrice(num(e.target.value))} size="small" />
                 </Box>
 
                 <Box sx={{ mb: 3 }}>
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 600 }}>Profit Target Exit Price (₹)</Typography>
-                  <TextField type="number" fullWidth value={targetPrice} onChange={(e) => setTargetPrice(Number(e.target.value))} size="small" />
+                  <TextField type="number" fullWidth value={targetPrice} onChange={(e) => setTargetPrice(num(e.target.value))} size="small" />
                 </Box>
               </Grid>
 
               <Grid size={{ xs: 12, md: 6 }} sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', bgcolor: '#f7f8fc', p: 3, borderRadius: 2, border: '1px solid #e9eaf2' }}>
-                <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600, mb: 1 }}>RISK REWARD RATIO</Typography>
-                <Typography variant="h4" sx={{ fontWeight: 700, mb: 3, color: '#ffb300', fontFamily: 'Outfit, sans-serif' }}>
-                  1 : {rrRatio}
-                </Typography>
-                <Divider sx={{ mb: 2 }} />
-                <Typography variant="body2" sx={{ color: 'text.secondary', mb: 1 }}>
-                  Per-share Risk: <span style={{ color: '#ef5350', fontWeight: 600 }}>₹{riskAmt}</span>
-                </Typography>
-                <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-                  Per-share Profit: <span style={{ color: '#26a69a', fontWeight: 600 }}>₹{rewardAmt}</span>
-                </Typography>
+                {riskAmt > 0 && rewardAmt > 0 ? (
+                  <>
+                    <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600, mb: 1 }}>RISK REWARD RATIO</Typography>
+                    <Typography variant="h4" sx={{ fontWeight: 700, mb: 3, color: '#ff9f0a', fontFamily: 'Outfit, sans-serif' }}>
+                      1 : {rrRatio}
+                    </Typography>
+                    <Divider sx={{ mb: 2 }} />
+                    <Typography variant="body2" sx={{ color: 'text.secondary', mb: 1 }}>
+                      Per-share Risk: <span style={{ color: '#e0483d', fontWeight: 600 }}>₹{riskAmt.toFixed(2)}</span>
+                    </Typography>
+                    <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+                      Per-share Profit: <span style={{ color: '#00b386', fontWeight: 600 }}>₹{rewardAmt.toFixed(2)}</span>
+                    </Typography>
+                  </>
+                ) : (
+                  <Alert severity="warning">
+                    Enter prices in order: <strong>Stop-loss &lt; Entry &lt; Target</strong> (for a long trade)
+                    to get a valid risk:reward.
+                  </Alert>
+                )}
               </Grid>
             </Grid>
           )}
@@ -226,12 +242,12 @@ const Calculators = () => {
                 
                 <Box sx={{ mb: 3 }}>
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 600 }}>Monthly Installment Amount (₹)</Typography>
-                  <TextField type="number" fullWidth value={sipMonthly} onChange={(e) => setSipMonthly(Number(e.target.value))} size="small" />
+                  <TextField type="number" fullWidth value={sipMonthly} onChange={(e) => setSipMonthly(num(e.target.value))} size="small" />
                 </Box>
 
                 <Box sx={{ mb: 3 }}>
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 600 }}>Expected Annual Returns Rate (%)</Typography>
-                  <TextField type="number" fullWidth value={sipReturn} onChange={(e) => setSipReturn(Number(e.target.value))} size="small" />
+                  <TextField type="number" fullWidth value={sipReturn} onChange={(e) => setSipReturn(num(e.target.value))} size="small" />
                 </Box>
 
                 <Box sx={{ mb: 3 }}>
@@ -274,21 +290,23 @@ const Calculators = () => {
                 </Box>
                 
                 <Alert severity="info" sx={{ bgcolor: '#f7f8fc', border: '1px solid #e9eaf2', color: '#6b7185' }}>
-                  Calculated based on flat ₹20 brokerage charge per executed options order, which is standard across top discount brokers in India (Zerodha, Angel One, Groww).
+                  Rough estimate: flat ₹20 brokerage/order (typical discount broker) + an approximate
+                  exchange/GST allowance. <strong>Excludes STT, stamp duty &amp; SEBI fees</strong>, which
+                  depend on premium turnover — see your broker contract note for exact charges.
                 </Alert>
               </Grid>
 
               <Grid size={{ xs: 12, md: 6 }} sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', bgcolor: '#f7f8fc', p: 3, borderRadius: 2, border: '1px solid #e9eaf2' }}>
-                <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>TOTAL TRANSACTION CHARGES</Typography>
+                <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>EST. TRANSACTION CHARGES (approx)</Typography>
                 <Typography variant="h3" sx={{ fontWeight: 700, mt: 1, mb: 3, color: '#ef5350', fontFamily: 'Outfit, sans-serif' }}>
-                  ₹{totalTransactionCost.toFixed(2)}
+                  ~₹{totalTransactionCost.toFixed(2)}
                 </Typography>
                 <Divider sx={{ mb: 2 }} />
                 <Typography variant="body2" sx={{ color: 'text.secondary', mb: 1 }}>
                   Base Brokerage Cost: <strong>₹{totalBrokerage.toFixed(2)}</strong>
                 </Typography>
                 <Typography variant="body2" sx={{ color: 'text.secondary', mb: 1 }}>
-                  NSE Transaction Tax: <strong>₹{nseTransactionCharges.toFixed(2)}</strong>
+                  Est. Exchange Charge (approx): <strong>₹{nseTransactionCharges.toFixed(2)}</strong>
                 </Typography>
                 <Typography variant="body2" sx={{ color: 'text.secondary' }}>
                   GST (18% on Brokerage + Exchange): <strong>₹{gstCharges.toFixed(2)}</strong>

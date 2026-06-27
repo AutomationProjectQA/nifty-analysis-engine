@@ -84,13 +84,17 @@ class DecisionAgentTest {
         ReflectionTestUtils.setField(decisionAgent, "momentumConfirmationEnabled", false);
         ReflectionTestUtils.setField(decisionAgent, "entryTimingEnabled", false);
         ReflectionTestUtils.setField(decisionAgent, "sessionFilterEnabled", false);
+        ReflectionTestUtils.setField(decisionAgent, "maxConcurrentPositions", 6);
 
         // Risk guard allows trading by default; one test overrides this.
         lenient().when(riskGuardService.canOpenNewTrade())
                 .thenReturn(RiskGuardService.RiskCheck.allow());
         // Pricing stubs used only by the signal-generating tests.
         lenient().when(optionPricingService.getOptionLtp(anyString(), anyInt())).thenReturn(150.0);
-        lenient().when(orderExecutionService.calculateQuantity(anyDouble())).thenReturn(65);
+        lenient().when(orderExecutionService.calculateQuantity(anyDouble(), anyInt())).thenReturn(65);
+        // Default: order is "skipped" (paper/simulated) so the signal is tracked normally.
+        lenient().when(orderExecutionService.executeOrder(anyString(), anyInt(), anyDouble(), anyInt()))
+                .thenReturn(OrderExecutionService.OrderResult.skipped());
         // Strikes are liquid by default; the per-strike liquidity gate passes.
         lenient().when(liquidityAgent.evaluateStrike(any(), anyBoolean()))
                 .thenReturn(new AgentResponse(100.0, "BULLISH", List.of()));
@@ -209,6 +213,41 @@ class DecisionAgentTest {
     }
 
     @Test
+    void maxConcurrentPositionsReached_noSignalGenerated() {
+        // Aggregate exposure cap: at/over the max open positions, no new trade opens.
+        stubUpToConfidence();
+        when(onnxModelService.isModelLoaded()).thenReturn(true);
+        when(marketSnapshotRepository.count()).thenReturn(100L);
+        stubAgentConfidence(80.0);
+        stubCritic(80.0); // clears the gate
+        when(tradeSignalRepository.countByStatus("ACTIVE")).thenReturn(6L); // == cap
+
+        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
+
+        verify(tradeSignalRepository, never()).save(any());
+        verify(orderExecutionService, never()).executeOrder(anyString(), anyInt(), anyDouble(), anyInt());
+    }
+
+    @Test
+    void orderFailed_noPhantomSignalCreated() {
+        // A FAILED live order must not leave a phantom ACTIVE signal behind.
+        stubUpToConfidence();
+        when(onnxModelService.isModelLoaded()).thenReturn(true);
+        when(marketSnapshotRepository.count()).thenReturn(100L);
+        stubAgentConfidence(80.0);
+        stubCritic(80.0);
+        when(llmService.generateTradeExplanation(anyString(), anyInt(), anyDouble(), anyMap(), anyString()))
+                .thenReturn("thesis");
+        when(orderExecutionService.executeOrder(anyString(), anyInt(), anyDouble(), anyInt()))
+                .thenReturn(OrderExecutionService.OrderResult.failed());
+
+        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
+
+        verify(tradeSignalRepository, never()).save(any());
+        verify(signalExplanationRepository, never()).saveAll(any());
+    }
+
+    @Test
     void modelReady_blendsModelAndAgentConfidence_andGeneratesSignal() {
         stubUpToConfidence();
         when(onnxModelService.isModelLoaded()).thenReturn(true);
@@ -226,7 +265,7 @@ class DecisionAgentTest {
         assertEquals(68.0, rawConfidence.getValue(), 0.001);
 
         verify(tradeSignalRepository, atLeastOnce()).save(any());
-        verify(orderExecutionService).executeOrder("BUY_CE", 23500, 23500.0);
+        verify(orderExecutionService).executeOrder("BUY_CE", 23500, 23500.0, 1);
     }
 
     @Test

@@ -9,6 +9,20 @@ import { subscribe } from '../api/marketStream';
 
 import TradingViewChart from '../components/TradingViewChart';
 
+// Merge only DEFINED, non-null fields from a payload onto the previous state, so a partial
+// snapshot or a tick (which carries only some fields) never overwrites a good value with
+// undefined — which would otherwise crash `.toFixed()`/`.toLocaleString()` in render.
+const mergeDefined = (prev, data) => {
+  if (!data) return prev;
+  const out = { ...prev };
+  for (const key of Object.keys(data)) {
+    if (data[key] !== null && data[key] !== undefined && !Number.isNaN(data[key])) {
+      out[key] = data[key];
+    }
+  }
+  return out;
+};
+
 const Dashboard = () => {
   const [marketData, setMarketData] = useState({
     niftySpot: 23510.50,
@@ -26,7 +40,7 @@ const Dashboard = () => {
     try {
       const response = await api.get('/api/v1/market/latest');
       if (response.data) {
-        setMarketData(response.data);
+        setMarketData((prev) => mergeDefined(prev, response.data));
         setLive(true);
       }
     } catch (e) {
@@ -41,15 +55,14 @@ const Dashboard = () => {
     // Full snapshot (incl. RSI/VWAP/EMA) on each collection cycle.
     const unsubSnap = subscribe('/topic/market', (data) => {
       if (data) {
-        setMarketData(data);
+        setMarketData((prev) => mergeDefined(prev, data));
         setLive(true);
       }
     });
     // Real-time ticks (spot/future/VIX) between cycles — merged onto the latest snapshot.
     const unsubTick = subscribe('/topic/tick', (t) => {
       if (t) {
-        setMarketData((prev) => ({
-          ...prev,
+        setMarketData((prev) => mergeDefined(prev, {
           niftySpot: t.niftySpot,
           niftyFuture: t.niftyFuture,
           indiaVix: t.indiaVix,
@@ -111,6 +124,10 @@ const Dashboard = () => {
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
           Market Snapshot
+          {live === null && (
+            <Chip label="Connecting…" size="small"
+              sx={{ bgcolor: 'rgba(107,113,133,0.12)', color: 'text.secondary', border: '1px solid rgba(107,113,133,0.25)', fontWeight: 600 }} />
+          )}
           {live === false && (
             <Chip label="Demo data" size="small"
               sx={{ bgcolor: 'rgba(255,179,0,0.12)', color: '#ffb300', border: '1px solid rgba(255,179,0,0.3)', fontWeight: 600 }} />
@@ -261,7 +278,7 @@ const Dashboard = () => {
               </Box>
 
               <Alert severity="info" sx={{ mt: 4, bgcolor: 'action.hover', border: '1px solid', borderColor: 'divider', color: 'text.secondary' }}>
-                Levels calculated mathematically using standard daily price pivots relative to yesterday close.
+                Indicative support/resistance bands derived from the live spot (±0.5% / ±1.2%), rounded to the nearest 50-point strike. Not classical pivot points.
               </Alert>
 
             </CardContent>

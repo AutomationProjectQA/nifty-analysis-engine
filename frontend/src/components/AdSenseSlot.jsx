@@ -6,8 +6,8 @@ const AdSenseSlot = ({ adSlot, adFormat = 'auto', responsive = 'true', style = {
   const [adBlocked, setAdBlocked] = useState(false);
 
   useEffect(() => {
-    // Check if the script is loaded, else set blocked to show fallback
-    setTimeout(() => {
+    // Check if the script is loaded, else set blocked to show fallback.
+    const timer = setTimeout(() => {
       try {
         if (window.adsbygoogle) {
           (window.adsbygoogle = window.adsbygoogle || []).push({});
@@ -19,41 +19,25 @@ const AdSenseSlot = ({ adSlot, adFormat = 'auto', responsive = 'true', style = {
         setAdBlocked(true);
       }
     }, 500);
+    return () => clearTimeout(timer); // avoid a state update after unmount
   }, []);
 
   const clientId = import.meta.env.VITE_ADSENSE_CLIENT_ID;
 
-  // Fallback state if AdSense client is missing or blocked
+  // No ad available (client missing or blocked). In production render nothing — never show
+  // end users a fake "advertisement". In dev, show a neutral, non-clickable placeholder.
   if (!clientId || adBlocked) {
+    if (!import.meta.env.DEV) return null;
     return (
       <Box
         sx={{
-          margin: '20px 0',
-          padding: '20px',
-          border: '1px dashed #e9eaf2',
-          backgroundColor: '#f7f8fc',
-          borderRadius: '8px',
-          textAlign: 'center',
-          color: '#6b7185',
-          minHeight: '90px',
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'center',
-          alignItems: 'center',
-          cursor: 'pointer',
-          '&:hover': {
-            borderColor: '#26a69a',
-            backgroundColor: '#e9eaf2',
-          }
+          margin: '20px 0', padding: '12px', border: '1px dashed #e9eaf2',
+          backgroundColor: '#f7f8fc', borderRadius: '8px', textAlign: 'center',
+          color: 'text.disabled', minHeight: '60px',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}
-        onClick={() => window.open('https://google.com/adsense/start', '_blank')}
       >
-        <Typography variant="caption" sx={{ fontWeight: 600, letterSpacing: '1px', textTransform: 'uppercase', color: '#ffb300' }}>
-          Sponsored Advertisement
-        </Typography>
-        <Typography variant="body2" sx={{ fontSize: '0.75rem', mt: 0.5 }}>
-          Monetize your Nifty analysis traffic. Click to set up your Google AdSense workspace. (Slot ID: {adSlot})
-        </Typography>
+        <Typography variant="caption">Ad slot (dev): {adSlot}</Typography>
       </Box>
     );
   }

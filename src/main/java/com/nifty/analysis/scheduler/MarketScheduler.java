@@ -19,6 +19,10 @@ public class MarketScheduler {
 
     private final MarketCollectorService marketCollectorService;
 
+    // Non-reentrancy guard: if a collection cycle runs longer than the schedule interval,
+    // skip the next tick instead of overlapping (which could double-generate signals/orders).
+    private final java.util.concurrent.atomic.AtomicBoolean collecting = new java.util.concurrent.atomic.AtomicBoolean(false);
+
     @Value("${nifty.collector.market-hours-only:false}")
     private boolean marketHoursOnly;
 
@@ -28,17 +32,26 @@ public class MarketScheduler {
             ZonedDateTime nowIst = ZonedDateTime.now(ZoneId.of("Asia/Kolkata"));
             DayOfWeek day = nowIst.getDayOfWeek();
             LocalTime time = nowIst.toLocalTime();
-            
+
             boolean isWeekday = (day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY);
             boolean isMarketHours = !time.isBefore(LocalTime.of(9, 15)) && !time.isAfter(LocalTime.of(15, 30));
-            
+
             if (!isWeekday || !isMarketHours) {
                 log.info("Current IST: {}. Skipping scheduled collection (outside Indian market hours).", nowIst);
                 return;
             }
         }
-        
-        marketCollectorService.collect();
+
+        // Skip this tick if the previous cycle is still running.
+        if (!collecting.compareAndSet(false, true)) {
+            log.warn("Previous collection cycle still running — skipping this tick to avoid overlap.");
+            return;
+        }
+        try {
+            marketCollectorService.collect();
+        } finally {
+            collecting.set(false);
+        }
     }
 
     @Scheduled(cron = "${nifty.cron-summary:0 */30 * * * *}")

@@ -17,4 +17,8 @@ public interface TradeResultRepository extends JpaRepository<TradeResult, Long> 
 
     @Query("select tr from TradeResult tr where tr.signal.signalTime between :start and :end")
     List<TradeResult> findBySignalTimeBetween(@Param("start") LocalDateTime start, @Param("end") LocalDateTime end);
+
+    /** Sum of NET realised P&L for trades whose signal fired at/after the given time (avoids N+1). */
+    @Query("select coalesce(sum(tr.profitLoss), 0) from TradeResult tr where tr.signal.signalTime >= :start")
+    double sumProfitLossSince(@Param("start") LocalDateTime start);
 }

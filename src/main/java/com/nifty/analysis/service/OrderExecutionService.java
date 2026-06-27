@@ -44,14 +44,37 @@ public class OrderExecutionService {
         this.telegramBotService = telegramBotService;
     }
 
-    public void executeOrder(String signalType, int strike, double prevSpot) {
+    /**
+     * Outcome of an order attempt. PLACED = a real broker order was confirmed (carries the
+     * order id). SKIPPED = no real order, by design (execution disabled or simulated/paper)
+     * — the signal is still tracked as paper. FAILED = a live order was attempted but did
+     * not go through — the caller must NOT create a phantom ACTIVE position.
+     */
+    public record OrderResult(Outcome outcome, String orderId) {
+        public enum Outcome { PLACED, SKIPPED, FAILED }
+        public static OrderResult placed(String orderId) { return new OrderResult(Outcome.PLACED, orderId); }
+        public static OrderResult skipped() { return new OrderResult(Outcome.SKIPPED, null); }
+        public static OrderResult failed() { return new OrderResult(Outcome.FAILED, null); }
+    }
+
+    public OrderResult executeOrder(String signalType, int strike, double prevSpot) {
+        return executeOrder(signalType, strike, prevSpot, 1);
+    }
+
+    /**
+     * @param splitAcross number of ladder legs sharing this signal's capital budget.
+     *                    The per-order allocation is divided by this so the whole ladder
+     *                    stays within one order's budget instead of N× over-allocating.
+     * @return the order outcome (PLACED / SKIPPED / FAILED).
+     */
+    public OrderResult executeOrder(String signalType, int strike, double prevSpot, int splitAcross) {
         if (!enabled) {
-            log.info("Order execution is disabled. Skipping live order placement.");
-            return;
+            log.info("Order execution is disabled. Skipping live order placement (paper).");
+            return OrderResult.skipped();
         }
         if (angelOneDataClient == null) {
-            log.info("No broker client available (simulated mode). Skipping order placement.");
-            return;
+            log.info("No broker client available (simulated mode). Skipping order placement (paper).");
+            return OrderResult.skipped();
         }
 
         log.info("Starting order execution workflow for signalType={}, strike={}", signalType, strike);
@@ -65,7 +88,7 @@ public class OrderExecutionService {
             log.error("Scrip details not found for symbol: {}. Cannot place order.", symbol);
             telegramBotService.sendMessage(
                     String.format("⚠️ *ORDER EXECUTION FAILED*\nScrip details not found for `%s`.", symbol));
-            return;
+            return OrderResult.failed();
         }
 
         // Fetch LTP to use as entry price. A real order must never be placed at a
@@ -76,15 +99,16 @@ public class OrderExecutionService {
                     symbol, scrip.token());
             telegramBotService.sendMessage(String.format(
                     "⚠️ *ORDER ABORTED*\nNo live premium for `%s` (feed down / simulated session). No order placed.", symbol));
-            return;
+            return OrderResult.failed();
         }
 
         // Fetch available wallet balance
         double walletBalance = fetchWalletBalance();
         log.info("Fetched wallet balance: {} INR", walletBalance);
 
-        // Calculate lots and quantity based on the configured per-order allocation
-        double allocatedCapital = walletBalance * (capitalPerOrderPercent / 100.0);
+        // Calculate lots and quantity based on the configured per-order allocation,
+        // split across the ladder legs sharing this budget (so the ladder doesn't N×-allocate).
+        double allocatedCapital = walletBalance * (capitalPerOrderPercent / 100.0) / Math.max(1, splitAcross);
         int lots = (int) Math.floor(allocatedCapital / (entryPremium * lotSize));
         int quantity = lots * lotSize;
 
@@ -94,7 +118,7 @@ public class OrderExecutionService {
                     "Wallet Balance: `%.2f` INR\n" +
                     "Required for 1 lot: `%.2f` INR (Premium: `%.2f`, Lot Size: `%d`)",
                     walletBalance, entryPremium * lotSize, entryPremium, lotSize));
-            return;
+            return OrderResult.failed();
         }
 
         // Target value is the configured profit percent of the option price
@@ -125,15 +149,15 @@ public class OrderExecutionService {
                     "• *Type:* `%s`\n" +
                     "• *Lots:* `%d` (Qty: `%d`)\n" +
                     "• *Entry Premium:* `%.2f`\n" +
-                    "• *Target (2%%):* `+%.2f` points (Exit: `%.2f`)\n" +
-                    "• *Stop Loss (2%%):* `-%.2f` points (Exit: `%.2f`)\n" +
+                    "• *Target (%.0f%%):* `+%.2f` points (Exit: `%.2f`)\n" +
+                    "• *Stop Loss (%.0f%%):* `-%.2f` points (Exit: `%.2f`)\n" +
                     "• *Allocated Wallet Capital:* `%.2f` INR",
                     symbol, scrip.token(), signalType, lots, quantity, entryPremium,
-                    targetPoints, entryPremium + targetPoints,
-                    stopLossPoints, entryPremium - stopLossPoints,
+                    targetProfitPercent, targetPoints, entryPremium + targetPoints,
+                    stopLossPercent, stopLossPoints, entryPremium - stopLossPoints,
                     entryPremium * quantity);
             telegramBotService.sendMessage(msg);
-            return;
+            return OrderResult.skipped(); // paper trade — track the signal, no real order
         }
 
         try {
@@ -180,24 +204,27 @@ public class OrderExecutionService {
                         "• *Type:* `%s`\n" +
                         "• *Lots:* `%d` (Qty: `%d`)\n" +
                         "• *Entry Premium:* `%.2f`\n" +
-                        "• *Target (2%%):* `+%.2f` points (Exit: `%.2f`)\n" +
-                        "• *Stop Loss (2%%):* `-%.2f` points (Exit: `%.2f`)\n" +
+                        "• *Target (%.0f%%):* `+%.2f` points (Exit: `%.2f`)\n" +
+                        "• *Stop Loss (%.0f%%):* `-%.2f` points (Exit: `%.2f`)\n" +
                         "• *Wallet Capital Used:* `%.2f` INR",
                         orderId, symbol, scrip.token(), signalType, lots, quantity, entryPremium,
-                        targetPoints, entryPremium + targetPoints,
-                        stopLossPoints, entryPremium - stopLossPoints,
+                        targetProfitPercent, targetPoints, entryPremium + targetPoints,
+                        stopLossPercent, stopLossPoints, entryPremium - stopLossPoints,
                         entryPremium * quantity);
                 telegramBotService.sendMessage(msg);
+                return OrderResult.placed(orderId);
             } else {
                 String errorMsg = response != null ? (String) response.get("message") : "Empty response";
                 log.error("Failed to place Robo Order: {}", errorMsg);
                 telegramBotService.sendMessage(String.format("⚠️ *LIVE ORDER PLACEMENT FAILED*\n" +
                         "• *Symbol:* `%s`\n" +
                         "• *Error:* `%s`", symbol, errorMsg));
+                return OrderResult.failed();
             }
         } catch (Exception e) {
             log.error("Exception during live order placement", e);
             telegramBotService.sendMessage(String.format("🚨 *ORDER PLACEMENT EXCEPTION*\n`%s`", e.getMessage()));
+            return OrderResult.failed();
         }
     }
 
@@ -207,11 +234,19 @@ public class OrderExecutionService {
      * Returns at least one lot so that tracked P&L is never zero.
      */
     public int calculateQuantity(double entryPremium) {
+        return calculateQuantity(entryPremium, 1);
+    }
+
+    /**
+     * @param splitAcross number of ladder legs sharing this signal's capital budget
+     *                    (the per-order allocation is divided by this).
+     */
+    public int calculateQuantity(double entryPremium, int splitAcross) {
         if (entryPremium <= 0) {
             return lotSize;
         }
         double walletBalance = fetchWalletBalance();
-        double allocatedCapital = walletBalance * (capitalPerOrderPercent / 100.0);
+        double allocatedCapital = walletBalance * (capitalPerOrderPercent / 100.0) / Math.max(1, splitAcross);
         int lots = (int) Math.floor(allocatedCapital / (entryPremium * lotSize));
         if (lots < 1) {
             lots = 1;
