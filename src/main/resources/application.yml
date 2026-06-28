@@ -100,6 +100,12 @@ nifty:
     day: TUESDAY
     holidays-resource: nse-holidays.txt
 
+  # P5-2 multi-instrument. NIFTY always runs. Enable BANKNIFTY (lot 30, step 100, Tuesday) only when
+  # you want it — keep it OFF for the live Nifty paper test so the portal/feed isn't mixed. Live Angel
+  # One Bank Nifty fetch isn't wired yet, so enable this mainly with provider=simulated.
+  instruments:
+    banknifty-enabled: true
+
   # P4-1: calibrate confidence points into a measured P(win) and gate on break-even + margin.
   calibration:
     enabled: true
@@ -213,7 +219,7 @@ nifty:
 
     # Set to true to enforce Indian stock market hours (09:15 - 15:30 IST, Mon-Fri)
     # Default is false to make local testing with SimulatedDataClient work 24/7.
-    market-hours-only: false
+    market-hours-only: true
     
     # Cron expression for data collection scheduler (default: every 1 minute)
     cron: "0 * * * * *"

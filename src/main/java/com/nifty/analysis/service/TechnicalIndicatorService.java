@@ -42,8 +42,8 @@ public class TechnicalIndicatorService {
      * live (not-yet-closed) price is appended as the latest point. Falls back gracefully
      * (returns currentPrice / SMA) until enough candles exist.
      */
-    public double calculateEmaFromCandles(String timeframe, int period, LocalDateTime evaluationTime, double currentPrice) {
-        List<Double> closes = candleCloses(timeframe, evaluationTime, period * 3, currentPrice);
+    public double calculateEmaFromCandles(String instrument, String timeframe, int period, LocalDateTime evaluationTime, double currentPrice) {
+        List<Double> closes = candleCloses(instrument, timeframe, evaluationTime, period * 3, currentPrice);
         if (closes.size() < 2) {
             return Math.round(currentPrice * 100.0) / 100.0;
         }
@@ -64,8 +64,8 @@ public class TechnicalIndicatorService {
      * Wilder RSI over a CANDLE close series (e.g. 5m). Proper SMA seed of the first `period`
      * changes, then Wilder smoothing. Returns 50 (neutral) until enough candles exist.
      */
-    public double calculateRsiFromCandles(String timeframe, int period, LocalDateTime evaluationTime, double currentPrice) {
-        List<Double> closes = candleCloses(timeframe, evaluationTime, period * 4, currentPrice);
+    public double calculateRsiFromCandles(String instrument, String timeframe, int period, LocalDateTime evaluationTime, double currentPrice) {
+        List<Double> closes = candleCloses(instrument, timeframe, evaluationTime, period * 4, currentPrice);
         if (closes.size() < period + 1) {
             return 50.0; // not enough data → neutral
         }
@@ -89,9 +89,9 @@ public class TechnicalIndicatorService {
     }
 
     /** Ascending close series from stored candles of a timeframe, with the live price appended. */
-    private List<Double> candleCloses(String timeframe, LocalDateTime evaluationTime, int limit, double currentPrice) {
-        List<MarketCandle> candles = marketCandleRepository.findHistoryBefore(
-                timeframe, evaluationTime, PageRequest.of(0, Math.max(2, limit))); // newest-first
+    private List<Double> candleCloses(String instrument, String timeframe, LocalDateTime evaluationTime, int limit, double currentPrice) {
+        List<MarketCandle> candles = marketCandleRepository.findHistoryBeforeByInstrument(
+                instrument, timeframe, evaluationTime, PageRequest.of(0, Math.max(2, limit))); // newest-first
         List<Double> closes = new ArrayList<>();
         for (int i = candles.size() - 1; i >= 0; i--) { // reverse to ascending (oldest-first)
             closes.add(candles.get(i).getClose());
@@ -176,14 +176,14 @@ public class TechnicalIndicatorService {
      * relative to current time.
      */
     public double calculateVwap(double currentPrice, double currentVolume) {
-        return calculateVwap(currentPrice, currentVolume, LocalDateTime.now());
+        return calculateVwap("NIFTY", currentPrice, currentVolume, LocalDateTime.now());
     }
 
     /**
      * Calculates Volume Weighted Average Price (VWAP) reset daily at 09:15 AM
      * relative to the evaluation time.
      */
-    public double calculateVwap(double currentPrice, double currentVolume, LocalDateTime evaluationTime) {
+    public double calculateVwap(String instrument, double currentPrice, double currentVolume, LocalDateTime evaluationTime) {
         LocalDateTime todayMarketOpen = evaluationTime.toLocalDate().atTime(LocalTime.of(9, 15));
 
         // If evaluation time is before 09:15 AM, return currentPrice
@@ -196,7 +196,7 @@ public class TechnicalIndicatorService {
         // difference consecutive snapshots into per-period volume — otherwise late-day
         // (huge cumulative) prices dominate and "VWAP" just hugs the latest price.
         List<MarketSnapshot> todaySnapshots = new java.util.ArrayList<>(
-                marketSnapshotRepository.findBetween(todayMarketOpen, evaluationTime));
+                marketSnapshotRepository.findBetweenByInstrument(instrument, todayMarketOpen, evaluationTime));
         todaySnapshots.sort(java.util.Comparator.comparing(MarketSnapshot::getSnapshotTime));
 
         double sumSpotVolume = 0.0;
@@ -225,11 +225,11 @@ public class TechnicalIndicatorService {
      * Calculates the daily return of the previous trading day.
      * Formula: (Close_yesterday - Open_yesterday) / Open_yesterday
      */
-    public double calculateYesterdayDailyReturn(LocalDateTime evaluationTime) {
+    public double calculateYesterdayDailyReturn(String instrument, LocalDateTime evaluationTime) {
         LocalDateTime todayOpen = evaluationTime.toLocalDate().atTime(9, 15);
 
         // Yesterday's close is the latest snapshot before today's market open
-        Optional<MarketSnapshot> yesterdayCloseSnap = marketSnapshotRepository.findLatestBefore(todayOpen);
+        Optional<MarketSnapshot> yesterdayCloseSnap = marketSnapshotRepository.findLatestBeforeByInstrument(instrument, todayOpen);
         if (yesterdayCloseSnap.isEmpty()) {
             return 0.0;
         }
@@ -237,7 +237,7 @@ public class TechnicalIndicatorService {
         // Find the open snapshot from the same day as yesterday's close
         LocalDateTime yesterdayOpenTime = yesterdayCloseSnap.get().getSnapshotTime().toLocalDate().atTime(9, 15);
         Optional<MarketSnapshot> yesterdayOpenSnap = marketSnapshotRepository
-                .findLatestBefore(yesterdayOpenTime.plusMinutes(15));
+                .findLatestBeforeByInstrument(instrument, yesterdayOpenTime.plusMinutes(15));
 
         if (yesterdayOpenSnap.isEmpty()) {
             // Fallback: search for any snapshot around that time or just use the close snap
@@ -411,7 +411,7 @@ public class TechnicalIndicatorService {
                     .toList();
         } else {
             LocalDateTime tenDaysAgo = evaluationTime.minusDays(10);
-            snapshots = marketSnapshotRepository.findBetween(tenDaysAgo, evaluationTime);
+            snapshots = marketSnapshotRepository.findBetweenByInstrument(latest.getInstrument(), tenDaysAgo, evaluationTime);
         }
         
         List<MarketCandleDto> candles = groupSnapshotsToHourlyCandles(snapshots);
@@ -439,7 +439,7 @@ public class TechnicalIndicatorService {
         double ema20ToEma50 = ema50 > 0 ? ema20 / ema50 : 1.0;
         
         double vix = latest.getIndiaVix() != null ? latest.getIndiaVix() : 15.0;
-        double prevReturn = calculateYesterdayDailyReturn(latest.getSnapshotTime());
+        double prevReturn = calculateYesterdayDailyReturn(latest.getInstrument(), latest.getSnapshotTime());
         double bbWidth = calculateBbWidth(candles);
         double macdHist = calculateMacdHist(candles);
         double volumeRatio = calculateVolumeRatio(candles);

@@ -115,6 +115,7 @@ public class DecisionAgent {
     private final MarketRegimeAgent marketRegimeAgent;
     private final MultiTimeframeAgent multiTimeframeAgent;
     private final com.nifty.analysis.engine.ConfidenceCalibrator calibrator;
+    private final com.nifty.analysis.instrument.InstrumentRegistry instrumentRegistry;
     private final MarketSnapshotRepository marketSnapshotRepository;
     private final TradeSignalRepository tradeSignalRepository;
     private final SignalExplanationRepository signalExplanationRepository;
@@ -129,6 +130,14 @@ public class DecisionAgent {
     @Transactional
     public void evaluateMarketForSignals(MarketSnapshot latest, Double prevSpot) {
         log.info("Decision Agent executing trade signals search...");
+
+        // P5-2: everything below is scoped to this snapshot's instrument (NIFTY, BANKNIFTY, ...).
+        String instrument = latest.getInstrument() != null ? latest.getInstrument() : "NIFTY";
+        com.nifty.analysis.instrument.InstrumentSpec spec = instrumentRegistry.get(instrument);
+        if (spec == null) {
+            log.warn("Unknown instrument '{}' — skipping evaluation.", instrument);
+            return;
+        }
 
         // 0. Risk guard: honour the kill switch and daily limits before opening any new trade.
         RiskGuardService.RiskCheck riskCheck = riskGuardService.canOpenNewTrade();
@@ -145,18 +154,18 @@ public class DecisionAgent {
         }
 
         // 1. Fetch Option Snapshots to retrieve active option chain
-        LocalDateTime latestOptionTime = optionSnapshotRepository.findLatestSnapshotTime();
+        LocalDateTime latestOptionTime = optionSnapshotRepository.findLatestSnapshotTimeByInstrument(instrument);
         if (latestOptionTime == null) {
-            log.warn("No option snapshots available. Cannot evaluate trading signals.");
+            log.warn("No option snapshots available for {}. Cannot evaluate trading signals.", instrument);
             return;
         }
 
-        List<OptionSnapshot> optionChainEntities = optionSnapshotRepository.findBySnapshotTime(latestOptionTime);
+        List<OptionSnapshot> optionChainEntities = optionSnapshotRepository.findByInstrumentAndSnapshotTime(instrument, latestOptionTime);
 
         // 1.5 Market regime: rather than skipping SIDEWAYS markets outright (which kills a
         // lot of valid scalps), allow them but demand extra confidence via a stricter gate.
         double effectiveGate = gatingThreshold;
-        AgentResponse regimeResponse = marketRegimeAgent.analyze(latest.getSnapshotTime());
+        AgentResponse regimeResponse = marketRegimeAgent.analyze(instrument, latest.getSnapshotTime());
         if ("SIDEWAYS".equals(regimeResponse.bias())) {
             effectiveGate += sidewaysExtraGate;
             log.info("Sideways regime detected. Raising gate to {}% (instead of skipping).", effectiveGate);
@@ -196,7 +205,7 @@ public class DecisionAgent {
         }
 
         String signalType = isBullish ? "BUY_CE" : "BUY_PE";
-        int atmStrike = ((int) Math.round(spotPrice / 50.0)) * 50;
+        int atmStrike = spec.atmStrike(spotPrice);
 
         // 2.5 Momentum confirmation: don't fight a strong opposing momentum tick.
         if (momentumConfirmationEnabled) {
@@ -308,12 +317,12 @@ public class DecisionAgent {
         // 7. Strike ladder: emit a signal for every liquid, non-duplicate candidate strike
         // (ITM / ATM / OTM). ITM has the highest delta so it captures the 2% premium move
         // most reliably; ATM/OTM add trade count.
-        List<Integer> candidateStrikes = buildCandidateStrikes(atmStrike, isBullish);
+        List<Integer> candidateStrikes = buildCandidateStrikes(atmStrike, isBullish, spec.strikeStep());
         int emitted = 0;
         double vix = latest.getIndiaVix();
         int ladderLegs = candidateStrikes.size();
         for (int strike : candidateStrikes) {
-            if (emitSignalForStrike(strike, signalType, isBullish, spotPrice, finalConfidence,
+            if (emitSignalForStrike(spec, strike, signalType, isBullish, spotPrice, finalConfidence,
                     modelConfidence, agentConfidence, rawConfidence, modelReady, rawResult, criticResult,
                     optionChainEntities, thesis, vix, ladderLegs)) {
                 emitted++;
@@ -323,18 +332,18 @@ public class DecisionAgent {
                 emitted, candidateStrikes.size());
     }
 
-    /** Builds the ITM/ATM/OTM candidate strikes for the ladder (ITM first). */
-    private List<Integer> buildCandidateStrikes(int atmStrike, boolean isBullish) {
+    /** Builds the ITM/ATM/OTM candidate strikes for the ladder (ITM first), using the instrument's step. */
+    private List<Integer> buildCandidateStrikes(int atmStrike, boolean isBullish, int step) {
         if (!strikeLadderEnabled) {
             return List.of(atmStrike);
         }
-        int itm = isBullish ? atmStrike - strikeStep : atmStrike + strikeStep;
-        int otm = isBullish ? atmStrike + strikeStep : atmStrike - strikeStep;
+        int itm = isBullish ? atmStrike - step : atmStrike + step;
+        int otm = isBullish ? atmStrike + step : atmStrike - step;
         return List.of(itm, atmStrike, otm);
     }
 
     /** Emits one signal for a strike if it is non-duplicate and liquid. Returns true if emitted. */
-    private boolean emitSignalForStrike(int strike, String signalType, boolean isBullish, double spotPrice,
+    private boolean emitSignalForStrike(com.nifty.analysis.instrument.InstrumentSpec spec, int strike, String signalType, boolean isBullish, double spotPrice,
             double finalConfidence, double modelConfidence, double agentConfidence, double rawConfidence,
             boolean modelReady, ConfidenceEngine.RawConfidenceResult rawResult, CriticAgent.CriticResult criticResult,
             List<OptionSnapshot> optionChainEntities, String thesis, double vix, int splitAcross) {
@@ -347,9 +356,10 @@ public class DecisionAgent {
             return false;
         }
 
-        // Per-strike duplicate guard
-        if (tradeSignalRepository.findFirstByStrikeAndSignalTypeAndStatus(strike, signalType, "ACTIVE").isPresent()) {
-            log.info("Active signal already exists for strike {} {}. Skipping.", strike, signalType);
+        // Per-strike duplicate guard (scoped to the instrument)
+        if (tradeSignalRepository.findFirstByInstrumentAndStrikeAndSignalTypeAndStatus(
+                spec.name(), strike, signalType, "ACTIVE").isPresent()) {
+            log.info("Active {} signal already exists for strike {} {}. Skipping.", spec.name(), strike, signalType);
             return false;
         }
 
@@ -376,7 +386,7 @@ public class DecisionAgent {
         double target1 = round2(entry * (1.0 + targetProfitPercent / 200.0));
         double target2 = round2(entry * (1.0 + targetProfitPercent / 100.0));
         double stopLoss = round2(entry * (1.0 - stopLossPercent / 100.0));
-        int quantity = orderExecutionService.calculateQuantity(entry, splitAcross);
+        int quantity = orderExecutionService.calculateQuantity(entry, splitAcross, spec.lotSize());
 
         // Risk assessment (advisory): evaluate R:R + volatility risk. Surfaced/logged for
         // every signal — NOT a hard block (the configured 2% target / 40% stop intentionally
@@ -398,6 +408,7 @@ public class DecisionAgent {
         }
 
         TradeSignal signal = new TradeSignal();
+        signal.setInstrument(spec.name());
         signal.setSignalTime(com.nifty.analysis.util.TimeUtil.nowIst());
         signal.setSignalType(signalType);
         signal.setStrike(strike);
@@ -426,7 +437,7 @@ public class DecisionAgent {
         explanations.add(explanation("Final_Confidence", round2(finalConfidence),
                 String.format("After critic penalties; gating threshold = %.1f%%", gatingThreshold)));
         explanations.add(explanation("Liquidity", round2(liquidity.score()),
-                "Strike liquidity score (" + strikeClass(strike, spotPrice, isBullish) + ")"));
+                "Strike liquidity score (" + strikeClass(strike, spotPrice, isBullish, spec.strikeStep()) + ")"));
         explanations.add(explanation("Risk_RR", round2(risk.score()),
                 "Risk advisory: " + String.join("; ", risk.comments())));
         for (Map.Entry<String, Double> entryScore : rawResult.factorScores().entrySet()) {
@@ -446,7 +457,7 @@ public class DecisionAgent {
         List<String> reasons = new ArrayList<>();
         reasons.add("*Thesis:* " + thesis);
         reasons.add(isBullish ? "Bullish trend structure" : "Bearish trend structure");
-        reasons.add("Strike " + strike + " (" + strikeClass(strike, spotPrice, isBullish) + ") — liquidity confirmed");
+        reasons.add("Strike " + strike + " (" + strikeClass(strike, spotPrice, isBullish, spec.strikeStep()) + ") — liquidity confirmed");
         reasons.add((("BULLISH".equals(risk.bias())) ? "Risk OK: " : "⚠️ Risk: ") + String.join("; ", risk.comments()));
         for (CriticAgent.PenaltyDetails p : criticResult.appliedPenalties()) {
             reasons.add("Critic Penalty: " + p.comment());
@@ -456,8 +467,8 @@ public class DecisionAgent {
     }
 
     /** Classifies a strike as ITM/ATM/OTM relative to spot for the given direction. */
-    private static String strikeClass(int strike, double spot, boolean isBullish) {
-        int atm = ((int) Math.round(spot / 50.0)) * 50;
+    private static String strikeClass(int strike, double spot, boolean isBullish, int step) {
+        int atm = (int) (Math.round(spot / step) * step);
         if (strike == atm) {
             return "ATM";
         }
@@ -493,8 +504,8 @@ public class DecisionAgent {
         String tech = technicalAgent.analyze(latest).bias();
         if ("BULLISH".equals(tech)) bull++; else if ("BEARISH".equals(tech)) bear++;
 
-        // 2. Multi-timeframe trend
-        double mtf = multiTimeframeAgent.analyze(latest.getSnapshotTime()).score();
+        // 2. Multi-timeframe trend (scoped to this instrument)
+        double mtf = multiTimeframeAgent.analyze(latest.getInstrument(), latest.getSnapshotTime()).score();
         if (mtf >= 55.0) bull++; else if (mtf <= 45.0) bear++;
 
         // 3. Futures basis vs cost-of-carry fair value (P3-4: normalized by days-to-expiry)

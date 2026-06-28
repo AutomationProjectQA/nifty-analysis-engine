@@ -242,16 +242,22 @@ public class OrderExecutionService {
      *                    (the per-order allocation is divided by this).
      */
     public int calculateQuantity(double entryPremium, int splitAcross) {
+        return calculateQuantity(entryPremium, splitAcross, lotSize);
+    }
+
+    /** P5-2: quantity for an explicit instrument lot size (e.g. NIFTY 65, BANKNIFTY 30). */
+    public int calculateQuantity(double entryPremium, int splitAcross, int instrumentLotSize) {
+        int lot = instrumentLotSize > 0 ? instrumentLotSize : lotSize;
         if (entryPremium <= 0) {
-            return lotSize;
+            return lot;
         }
         double walletBalance = fetchWalletBalance();
         double allocatedCapital = walletBalance * (capitalPerOrderPercent / 100.0) / Math.max(1, splitAcross);
-        int lots = (int) Math.floor(allocatedCapital / (entryPremium * lotSize));
+        int lots = (int) Math.floor(allocatedCapital / (entryPremium * lot));
         if (lots < 1) {
             lots = 1;
         }
-        return lots * lotSize;
+        return lots * lot;
     }
 
     private double fetchWalletBalance() {

@@ -54,6 +54,7 @@ class DecisionAgentTest {
     @Mock private MarketRegimeAgent marketRegimeAgent;
     @Mock private MultiTimeframeAgent multiTimeframeAgent;
     @Mock private com.nifty.analysis.engine.ConfidenceCalibrator calibrator;
+    @Mock private com.nifty.analysis.instrument.InstrumentRegistry instrumentRegistry;
     @Mock private MarketSnapshotRepository marketSnapshotRepository;
     @Mock private TradeSignalRepository tradeSignalRepository;
     @Mock private SignalExplanationRepository signalExplanationRepository;
@@ -88,12 +89,16 @@ class DecisionAgentTest {
         ReflectionTestUtils.setField(decisionAgent, "sessionFilterEnabled", false);
         ReflectionTestUtils.setField(decisionAgent, "maxConcurrentPositions", 6);
 
+        // Instrument registry: resolve NIFTY spec (step 50, lot 65) for every evaluation.
+        lenient().when(instrumentRegistry.get("NIFTY"))
+                .thenReturn(new com.nifty.analysis.instrument.InstrumentSpec("NIFTY", 50, 65, true));
+
         // Risk guard allows trading by default; one test overrides this.
         lenient().when(riskGuardService.canOpenNewTrade())
                 .thenReturn(RiskGuardService.RiskCheck.allow());
         // Pricing stubs used only by the signal-generating tests.
         lenient().when(optionPricingService.getOptionLtp(anyString(), anyInt())).thenReturn(150.0);
-        lenient().when(orderExecutionService.calculateQuantity(anyDouble(), anyInt())).thenReturn(65);
+        lenient().when(orderExecutionService.calculateQuantity(anyDouble(), anyInt(), anyInt())).thenReturn(65);
         // Default: order is "skipped" (paper/simulated) so the signal is tracked normally.
         lenient().when(orderExecutionService.executeOrder(anyString(), anyInt(), anyDouble(), anyInt()))
                 .thenReturn(OrderExecutionService.OrderResult.skipped());
@@ -122,12 +127,12 @@ class DecisionAgentTest {
 
     /** Stubs the path up to (but not including) the confidence computation, for a BULLISH setup. */
     private void stubUpToConfidence() {
-        when(optionSnapshotRepository.findLatestSnapshotTime()).thenReturn(now);
-        when(optionSnapshotRepository.findBySnapshotTime(now)).thenReturn(atmChain());
-        when(marketRegimeAgent.analyze(now)).thenReturn(new AgentResponse(85.0, "TRENDING_BULLISH", List.of()));
+        when(optionSnapshotRepository.findLatestSnapshotTimeByInstrument("NIFTY")).thenReturn(now);
+        when(optionSnapshotRepository.findByInstrumentAndSnapshotTime("NIFTY", now)).thenReturn(atmChain());
+        when(marketRegimeAgent.analyze("NIFTY", now)).thenReturn(new AgentResponse(85.0, "TRENDING_BULLISH", List.of()));
         when(technicalAgent.analyze(latest)).thenReturn(new AgentResponse(80.0, "BULLISH", List.of()));
         // Reached only when a signal is actually emitted (per-strike duplicate guard).
-        lenient().when(tradeSignalRepository.findFirstByStrikeAndSignalTypeAndStatus(23500, "BUY_CE", "ACTIVE"))
+        lenient().when(tradeSignalRepository.findFirstByInstrumentAndStrikeAndSignalTypeAndStatus("NIFTY", 23500, "BUY_CE", "ACTIVE"))
                 .thenReturn(Optional.empty());
         when(technicalAgent.getFeatures(latest))
                 .thenReturn(new TechnicalAgent.TechnicalFeatures(50, 1.0, 1.0, 12, 0.0, 0.01, 0.0, 1.0));
@@ -152,7 +157,7 @@ class DecisionAgentTest {
 
     @Test
     void noOptionData_skipsEvaluation() {
-        when(optionSnapshotRepository.findLatestSnapshotTime()).thenReturn(null);
+        when(optionSnapshotRepository.findLatestSnapshotTimeByInstrument("NIFTY")).thenReturn(null);
 
         decisionAgent.evaluateMarketForSignals(latest, 23490.0);
 
@@ -177,7 +182,7 @@ class DecisionAgentTest {
     void sidewaysRegime_raisesGateInsteadOfSkipping() {
         // Sideways no longer hard-skips: it proceeds but demands gating + sidewaysExtraGate (60 + 8 = 68).
         stubUpToConfidence();
-        when(marketRegimeAgent.analyze(now)).thenReturn(new AgentResponse(50.0, "SIDEWAYS", List.of()));
+        when(marketRegimeAgent.analyze("NIFTY", now)).thenReturn(new AgentResponse(50.0, "SIDEWAYS", List.of()));
         when(onnxModelService.isModelLoaded()).thenReturn(false);
         when(marketSnapshotRepository.count()).thenReturn(100L);
         stubAgentConfidence(63.0);
@@ -193,9 +198,9 @@ class DecisionAgentTest {
 
     @Test
     void neutralBias_skipsEvaluation() {
-        when(optionSnapshotRepository.findLatestSnapshotTime()).thenReturn(now);
-        when(optionSnapshotRepository.findBySnapshotTime(now)).thenReturn(List.of());
-        when(marketRegimeAgent.analyze(now)).thenReturn(new AgentResponse(85.0, "TRENDING_BULLISH", List.of()));
+        when(optionSnapshotRepository.findLatestSnapshotTimeByInstrument("NIFTY")).thenReturn(now);
+        when(optionSnapshotRepository.findByInstrumentAndSnapshotTime("NIFTY", now)).thenReturn(List.of());
+        when(marketRegimeAgent.analyze("NIFTY", now)).thenReturn(new AgentResponse(85.0, "TRENDING_BULLISH", List.of()));
         when(technicalAgent.analyze(latest)).thenReturn(new AgentResponse(50.0, "NEUTRAL", List.of()));
 
         decisionAgent.evaluateMarketForSignals(latest, 23490.0);
@@ -382,11 +387,11 @@ class DecisionAgentTest {
     @Test
     void directionConsensus_skipsWhenNoMajority() {
         // Only technical is bullish (1 of 4) → below the 3-vote requirement → skip.
-        when(optionSnapshotRepository.findLatestSnapshotTime()).thenReturn(now);
-        when(optionSnapshotRepository.findBySnapshotTime(now)).thenReturn(atmChain());
-        when(marketRegimeAgent.analyze(now)).thenReturn(new AgentResponse(85.0, "TRENDING_BULLISH", List.of()));
+        when(optionSnapshotRepository.findLatestSnapshotTimeByInstrument("NIFTY")).thenReturn(now);
+        when(optionSnapshotRepository.findByInstrumentAndSnapshotTime("NIFTY", now)).thenReturn(atmChain());
+        when(marketRegimeAgent.analyze("NIFTY", now)).thenReturn(new AgentResponse(85.0, "TRENDING_BULLISH", List.of()));
         when(technicalAgent.analyze(latest)).thenReturn(new AgentResponse(80.0, "BULLISH", List.of()));
-        when(multiTimeframeAgent.analyze(now)).thenReturn(new AgentResponse(50.0, "NEUTRAL", List.of()));
+        when(multiTimeframeAgent.analyze("NIFTY", now)).thenReturn(new AgentResponse(50.0, "NEUTRAL", List.of()));
         when(optionsAgent.analyze(anyList(), anyDouble(), anyDouble()))
                 .thenReturn(new AgentResponse(50.0, "NEUTRAL", List.of()));
         latest.setNiftyFuture(23505.0); // premium +5 → no futures vote
@@ -441,7 +446,7 @@ class DecisionAgentTest {
     void directionConsensus_buysCeOnBullishMajority() {
         // technical + mtf + futures(+30) + OI all bullish → 4 votes → trade.
         stubUpToConfidence();
-        when(multiTimeframeAgent.analyze(now)).thenReturn(new AgentResponse(90.0, "BULLISH", List.of()));
+        when(multiTimeframeAgent.analyze("NIFTY", now)).thenReturn(new AgentResponse(90.0, "BULLISH", List.of()));
         when(optionsAgent.analyze(anyList(), anyDouble(), anyDouble()))
                 .thenReturn(new AgentResponse(85.0, "BULLISH", List.of()));
         latest.setNiftyFuture(23530.0); // premium +30 → bullish futures vote

@@ -16,4 +16,12 @@ public interface MarketCandleRepository extends JpaRepository<MarketCandle, Long
 
     @Query("SELECT c FROM MarketCandle c WHERE c.timeframe = :timeframe AND c.timestamp <= :time ORDER BY c.timestamp DESC")
     List<MarketCandle> findHistoryBefore(@Param("timeframe") String timeframe, @Param("time") LocalDateTime time, org.springframework.data.domain.Pageable pageable);
+
+    // --- P5-2 instrument-scoped variants ---
+
+    @Query("SELECT c FROM MarketCandle c WHERE c.instrument = :instrument AND c.timeframe = :timeframe ORDER BY c.timestamp DESC LIMIT :limit")
+    List<MarketCandle> findLatestByInstrumentAndTimeframe(@Param("instrument") String instrument, @Param("timeframe") String timeframe, @Param("limit") int limit);
+
+    @Query("SELECT c FROM MarketCandle c WHERE c.instrument = :instrument AND c.timeframe = :timeframe AND c.timestamp <= :time ORDER BY c.timestamp DESC")
+    List<MarketCandle> findHistoryBeforeByInstrument(@Param("instrument") String instrument, @Param("timeframe") String timeframe, @Param("time") LocalDateTime time, org.springframework.data.domain.Pageable pageable);
 }

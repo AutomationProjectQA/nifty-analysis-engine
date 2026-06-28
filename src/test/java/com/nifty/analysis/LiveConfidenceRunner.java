@@ -148,7 +148,7 @@ public class LiveConfidenceRunner {
         // Mock MarketRegimeAgent since it depends on snapshot database history
         MarketRegimeAgent regimeAgent = new MarketRegimeAgent(null, null) {
             @Override
-            public AgentResponse analyze(LocalDateTime time) {
+            public AgentResponse analyze(String instrument, LocalDateTime time) {
                 // Return Bearish trending regime based on current Spot < EMA20 < EMA50
                 return new AgentResponse(15.0, "TRENDING_BEARISH",
                         List.of("Trending Bearish regime (Spot < EMA20 < EMA50)"));
@@ -169,7 +169,7 @@ public class LiveConfidenceRunner {
 
         MultiTimeframeAgent timeframeAgent = new MultiTimeframeAgent(null) {
             @Override
-            public AgentResponse analyze(LocalDateTime time) {
+            public AgentResponse analyze(String instrument, LocalDateTime time) {
                 return new AgentResponse(50.0, "NEUTRAL", List.of("Live Confidence Runner timeframe neutral fallback"));
             }
         };

@@ -37,6 +37,7 @@ public class MarketCollectorService {
     private final MarketSnapshotRepository marketSnapshotRepository;
     private final OptionSnapshotRepository optionSnapshotRepository;
     private final MarketCandleRepository marketCandleRepository;
+    private final com.nifty.analysis.instrument.InstrumentRegistry instrumentRegistry;
     private final TradeSignalRepository tradeSignalRepository;
     private final TradeResultRepository tradeResultRepository;
 
@@ -110,24 +111,34 @@ public class MarketCollectorService {
     // is never re-entered concurrently.
     public void collect() {
         log.info("Starting market and option chain data collection cycle...");
+        // P5-2: run the pipeline for every enabled instrument (NIFTY always; BANKNIFTY when enabled).
+        for (com.nifty.analysis.instrument.InstrumentSpec spec : instrumentRegistry.active()) {
+            collectForInstrument(spec);
+        }
+        // Push the current (all-instrument) signal set to the portal once per cycle.
+        marketStreamPublisher.publishSignals(tradeSignalRepository.findAllByOrderBySignalTimeDesc());
+    }
+
+    private void collectForInstrument(com.nifty.analysis.instrument.InstrumentSpec spec) {
+        String instrument = spec.name();
         try {
             LocalDateTime now = com.nifty.analysis.util.TimeUtil.nowIst();
 
-            // 1. Fetch & Store Market Snapshot
-            MarketSnapshotDto marketData = marketDataClient.fetchMarketData();
+            // 1. Fetch & Store Market Snapshot (per instrument)
+            MarketSnapshotDto marketData = marketDataClient.fetchMarketData(instrument);
 
-            // Previous snapshot (still used below for the prev-spot delta passed to the decision agent).
-            Optional<MarketSnapshot> prevSnapshot = marketSnapshotRepository.findLatest();
+            // Previous snapshot for THIS instrument (prev-spot delta + freshness baseline).
+            Optional<MarketSnapshot> prevSnapshot = marketSnapshotRepository.findLatestByInstrument(instrument);
 
-            // Calculate technical indicators on the 5m CANDLE series (real period EMAs/RSI),
-            // not on 1-minute ticks (which made "EMA20" a noisy 20-minute EMA and RSI a 14-minute RSI).
-            double ema20 = technicalIndicatorService.calculateEmaFromCandles("5m", 20, marketData.timestamp(), marketData.niftySpot());
-            double ema50 = technicalIndicatorService.calculateEmaFromCandles("5m", 50, marketData.timestamp(), marketData.niftySpot());
-            double rsi = technicalIndicatorService.calculateRsiFromCandles("5m", 14, marketData.timestamp(), marketData.niftySpot());
-            double vwap = technicalIndicatorService.calculateVwap(marketData.niftySpot(), marketData.volume(),
+            // Indicators on the instrument's 5m candle series.
+            double ema20 = technicalIndicatorService.calculateEmaFromCandles(instrument, "5m", 20, marketData.timestamp(), marketData.niftySpot());
+            double ema50 = technicalIndicatorService.calculateEmaFromCandles(instrument, "5m", 50, marketData.timestamp(), marketData.niftySpot());
+            double rsi = technicalIndicatorService.calculateRsiFromCandles(instrument, "5m", 14, marketData.timestamp(), marketData.niftySpot());
+            double vwap = technicalIndicatorService.calculateVwap(instrument, marketData.niftySpot(), marketData.volume(),
                     marketData.timestamp());
 
             MarketSnapshot snapshot = new MarketSnapshot();
+            snapshot.setInstrument(instrument);
             snapshot.setSnapshotTime(marketData.timestamp());
             snapshot.setNiftySpot(marketData.niftySpot());
             snapshot.setNiftyFuture(marketData.niftyFuture());
@@ -138,22 +149,20 @@ public class MarketCollectorService {
             snapshot.setRsi(rsi);
             snapshot.setVwap(vwap);
 
-            // Persist & Cache Market Snapshot
             marketSnapshotRepository.save(snapshot);
             redisService.saveLatestMarketSnapshot(snapshot);
             marketStreamPublisher.publishMarket(snapshot); // live push to the portal
-            log.info("Market Snapshot persisted: Spot={}, Future={}, VIX={}, EMA20={}, EMA50={}, RSI={}, VWAP={}",
-                    snapshot.getNiftySpot(), snapshot.getNiftyFuture(), snapshot.getIndiaVix(),
+            log.info("[{}] Snapshot persisted: Spot={}, Future={}, VIX={}, EMA20={}, EMA50={}, RSI={}, VWAP={}",
+                    instrument, snapshot.getNiftySpot(), snapshot.getNiftyFuture(), snapshot.getIndiaVix(),
                     snapshot.getEma20(), snapshot.getEma50(), snapshot.getRsi(), snapshot.getVwap());
 
-            // 2. Fetch & Store Option Chain Snapshots
-            List<OptionSnapshotDto> optionChainData = optionChainClient.fetchOptionChain();
-
-            // Calculate Max Pain for the current option chain
+            // 2. Fetch & Store Option Chain Snapshots (per instrument)
+            List<OptionSnapshotDto> optionChainData = optionChainClient.fetchOptionChain(instrument);
             double calculatedMaxPain = optionsIndicatorService.calculateMaxPain(optionChainData);
 
             List<OptionSnapshot> optionSnapshots = optionChainData.stream().map(dto -> {
                 OptionSnapshot option = new OptionSnapshot();
+                option.setInstrument(instrument);
                 option.setSnapshotTime(dto.timestamp());
                 option.setStrikePrice(dto.strikePrice());
                 option.setCeOi(dto.ceOi());
@@ -170,38 +179,34 @@ public class MarketCollectorService {
 
             optionSnapshotRepository.saveAll(optionSnapshots);
             redisService.saveLatestOptionChain(optionSnapshots);
-            marketStreamPublisher.publishOptions(optionSnapshots); // live push to the portal
-            log.info("Option Chain snapshot persisted ({} strikes, Max Pain={})", optionSnapshots.size(),
+            marketStreamPublisher.publishOptions(optionSnapshots);
+            log.info("[{}] Option chain persisted ({} strikes, Max Pain={})", instrument, optionSnapshots.size(),
                     calculatedMaxPain);
 
-            // 3. Update Market Candles (5m, 15m, 30m, 60m Timeframes)
-            updateCandle(marketData.niftySpot(), marketData.volume(), now, "5m");
-            updateCandle(marketData.niftySpot(), marketData.volume(), now, "15m");
-            updateCandle(marketData.niftySpot(), marketData.volume(), now, "30m");
-            updateCandle(marketData.niftySpot(), marketData.volume(), now, "60m");
+            // 3. Update the instrument's candles (5m/15m/30m/60m)
+            updateCandle(instrument, marketData.niftySpot(), marketData.volume(), now, "5m");
+            updateCandle(instrument, marketData.niftySpot(), marketData.volume(), now, "15m");
+            updateCandle(instrument, marketData.niftySpot(), marketData.volume(), now, "30m");
+            updateCandle(instrument, marketData.niftySpot(), marketData.volume(), now, "60m");
 
-            // 4. Trigger Decision Agent signal evaluations — but only on a FRESH feed. A frozen or
-            // lagging feed would otherwise open new positions on dead prices (P5-5 freshness gate).
+            // 4. Decision step (fresh feed only; off-loaded so a slow LLM can't drop a minute).
             LocalDateTime prevTime = prevSnapshot.map(MarketSnapshot::getSnapshotTime).orElse(null);
             if (isFeedStale(marketData.timestamp(), prevTime, now, maxStalenessSeconds)) {
-                log.warn("Stale/frozen feed (tick={}, prev={}, now={}). Skipping signal generation this cycle.",
-                        marketData.timestamp(), prevTime, now);
+                log.warn("[{}] Stale/frozen feed (tick={}, prev={}). Skipping signal generation.", instrument,
+                        marketData.timestamp(), prevTime);
             } else {
                 dispatchDecision(snapshot, prevSnapshot.map(MarketSnapshot::getNiftySpot).orElse(null));
             }
 
-            // 5. Update and resolve active trade signals in real-time
+            // 5. Resolve the instrument's active trades.
             updateActiveTrades(snapshot);
 
-            // 6. Push the current signal set to the portal
-            marketStreamPublisher.publishSignals(tradeSignalRepository.findAllByOrderBySignalTimeDesc());
-
         } catch (Exception e) {
-            log.error("Error during data collection cycle", e);
+            log.error("Error during {} collection cycle", instrument, e);
         }
     }
 
-    private void updateCandle(double spot, double totalVolume, LocalDateTime now, String timeframe) {
+    private void updateCandle(String instrument, double spot, double totalVolume, LocalDateTime now, String timeframe) {
         int minutes = 5;
         if ("15m".equals(timeframe)) {
             minutes = 15;
@@ -212,9 +217,9 @@ public class MarketCollectorService {
         }
         LocalDateTime candleStart = roundToTimeframe(now, minutes);
 
-        // Find volume at the start of the timeframe
+        // Find volume at the start of the timeframe (instrument-scoped)
         double volumeBefore = 0.0;
-        Optional<MarketSnapshot> prevSnap = marketSnapshotRepository.findLatestBefore(candleStart);
+        Optional<MarketSnapshot> prevSnap = marketSnapshotRepository.findLatestBeforeByInstrument(instrument, candleStart);
         if (prevSnap.isPresent()) {
             if (prevSnap.get().getSnapshotTime().toLocalDate().equals(candleStart.toLocalDate())) {
                 volumeBefore = prevSnap.get().getVolume() != null ? prevSnap.get().getVolume() : 0.0;
@@ -222,8 +227,8 @@ public class MarketCollectorService {
         }
         double currentCandleVolume = Math.max(0.0, totalVolume - volumeBefore);
 
-        // Find existing candle for the timeframe and start time
-        List<MarketCandle> existingCandles = marketCandleRepository.findLatestByTimeframe(timeframe, 1);
+        // Find existing candle for this instrument + timeframe + start time
+        List<MarketCandle> existingCandles = marketCandleRepository.findLatestByInstrumentAndTimeframe(instrument, timeframe, 1);
 
         MarketCandle candle;
         if (!existingCandles.isEmpty() && existingCandles.getFirst().getTimestamp().equals(candleStart)) {
@@ -234,6 +239,7 @@ public class MarketCollectorService {
             candle.setVolume(currentCandleVolume);
         } else {
             candle = new MarketCandle();
+            candle.setInstrument(instrument);
             candle.setTimestamp(candleStart);
             candle.setOpen(spot);
             candle.setHigh(spot);
@@ -308,8 +314,9 @@ public class MarketCollectorService {
 
     @Transactional
     public void updateActiveTrades(MarketSnapshot latest) {
-        log.info("Checking and updating active trades relative to spot price {}...", latest.getNiftySpot());
-        List<TradeSignal> activeSignals = tradeSignalRepository.findByStatus("ACTIVE");
+        String instrument = latest.getInstrument() != null ? latest.getInstrument() : "NIFTY";
+        log.info("[{}] Checking active trades relative to spot {}...", instrument, latest.getNiftySpot());
+        List<TradeSignal> activeSignals = tradeSignalRepository.findByInstrumentAndStatus(instrument, "ACTIVE");
         if (activeSignals.isEmpty()) {
             return;
         }

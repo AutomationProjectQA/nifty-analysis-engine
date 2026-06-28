@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class InstrumentRegistryTest {
 
-    private final InstrumentRegistry registry = new InstrumentRegistry();
+    private final InstrumentRegistry registry = new InstrumentRegistry(false);
 
     @Test
     void niftySpec_strikeStep50_lot65_enabled() {

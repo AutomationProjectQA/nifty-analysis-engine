@@ -24,4 +24,18 @@ public interface MarketSnapshotRepository extends JpaRepository<MarketSnapshot, 
 
     @Query("SELECT m FROM MarketSnapshot m WHERE m.snapshotTime >= :start AND m.snapshotTime <= :end")
     List<MarketSnapshot> findBetween(@Param("start") LocalDateTime start, @Param("end") LocalDateTime end);
+
+    // --- P5-2 instrument-scoped variants (used by the per-instrument trading pipeline) ---
+
+    @Query("SELECT m FROM MarketSnapshot m WHERE m.instrument = :instrument ORDER BY m.snapshotTime DESC LIMIT 1")
+    Optional<MarketSnapshot> findLatestByInstrument(@Param("instrument") String instrument);
+
+    @Query("SELECT m FROM MarketSnapshot m WHERE m.instrument = :instrument AND m.snapshotTime <= :time ORDER BY m.snapshotTime DESC LIMIT 1")
+    Optional<MarketSnapshot> findLatestBeforeByInstrument(@Param("instrument") String instrument, @Param("time") LocalDateTime time);
+
+    @Query("SELECT m FROM MarketSnapshot m WHERE m.instrument = :instrument AND m.snapshotTime < :time ORDER BY m.snapshotTime DESC")
+    List<MarketSnapshot> findHistoryBeforeByInstrument(@Param("instrument") String instrument, @Param("time") LocalDateTime time, Pageable pageable);
+
+    @Query("SELECT m FROM MarketSnapshot m WHERE m.instrument = :instrument AND m.snapshotTime >= :start AND m.snapshotTime <= :end")
+    List<MarketSnapshot> findBetweenByInstrument(@Param("instrument") String instrument, @Param("start") LocalDateTime start, @Param("end") LocalDateTime end);
 }

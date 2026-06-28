@@ -40,7 +40,7 @@ class MultiTimeframeAgentTest {
     }
 
     private void stub(String tf, MarketCandle candle) {
-        when(marketCandleRepository.findHistoryBefore(eq(tf), any(LocalDateTime.class), any(Pageable.class)))
+        when(marketCandleRepository.findHistoryBeforeByInstrument(eq("NIFTY"), eq(tf), any(LocalDateTime.class), any(Pageable.class)))
                 .thenReturn(candle == null ? List.of() : List.of(candle));
     }
 
@@ -49,7 +49,7 @@ class MultiTimeframeAgentTest {
         for (String tf : new String[]{"5m", "15m", "30m", "60m"}) {
             stub(tf, candle(100.0, 110.0)); // close > open on every real HTF table
         }
-        AgentResponse r = agent().analyze(now);
+        AgentResponse r = agent().analyze("NIFTY", now);
         assertEquals(90.0, r.score(), 0.01);
         assertEquals("BULLISH", r.bias());
     }
@@ -59,7 +59,7 @@ class MultiTimeframeAgentTest {
         for (String tf : new String[]{"5m", "15m", "30m", "60m"}) {
             stub(tf, candle(110.0, 100.0));
         }
-        AgentResponse r = agent().analyze(now);
+        AgentResponse r = agent().analyze("NIFTY", now);
         assertEquals(10.0, r.score(), 0.01);
         assertEquals("BEARISH", r.bias());
     }
@@ -70,7 +70,7 @@ class MultiTimeframeAgentTest {
         stub("15m", candle(100.0, 110.0));  // bullish
         stub("30m", null);                   // insufficient
         stub("60m", null);                   // insufficient
-        AgentResponse r = agent().analyze(now);
+        AgentResponse r = agent().analyze("NIFTY", now);
         // 2 of 2 available are bullish → full alignment among what exists
         assertEquals(90.0, r.score(), 0.01);
         assertEquals("BULLISH", r.bias());
@@ -82,7 +82,7 @@ class MultiTimeframeAgentTest {
         for (String tf : new String[]{"5m", "15m", "30m", "60m"}) {
             stub(tf, null);
         }
-        AgentResponse r = agent().analyze(now);
+        AgentResponse r = agent().analyze("NIFTY", now);
         assertEquals(50.0, r.score(), 0.01);
         assertEquals("NEUTRAL", r.bias());
     }

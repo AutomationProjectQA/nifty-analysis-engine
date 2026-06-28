@@ -38,7 +38,7 @@ class MarketRegimeAgentTest {
     void setUp() {
         // No candle history -> calculateAtr() returns its 15.0 fallback, so the
         // sideways threshold is simply (factor * 15).
-        lenient().when(marketCandleRepository.findHistoryBefore(eq("5m"), any(), any()))
+        lenient().when(marketCandleRepository.findHistoryBeforeByInstrument(eq("NIFTY"), eq("5m"), any(), any()))
                 .thenReturn(List.of());
     }
 
@@ -61,9 +61,9 @@ class MarketRegimeAgentTest {
         s.setSnapshotTime(now);
         s.setNiftySpot(23500.0);
         s.setIndiaVix(22.0); // > 18
-        when(marketSnapshotRepository.findHistoryBefore(any(), any(Pageable.class))).thenReturn(List.of(s));
+        when(marketSnapshotRepository.findHistoryBeforeByInstrument(any(), any(), any(Pageable.class))).thenReturn(List.of(s));
 
-        AgentResponse response = marketRegimeAgent.analyze(now);
+        AgentResponse response = marketRegimeAgent.analyze("NIFTY", now);
 
         assertEquals("HIGH_VOLATILITY", response.bias());
     }
@@ -71,10 +71,10 @@ class MarketRegimeAgentTest {
     @Test
     void defaultFactor_flagsLowVolatilityAsSideways() {
         ReflectionTestUtils.setField(marketRegimeAgent, "sidewaysAtrFactor", 0.10); // threshold = 1.5 > 0.5
-        when(marketSnapshotRepository.findHistoryBefore(any(), any(Pageable.class)))
+        when(marketSnapshotRepository.findHistoryBeforeByInstrument(any(), any(), any(Pageable.class)))
                 .thenReturn(mildlyChoppyHistory());
 
-        AgentResponse response = marketRegimeAgent.analyze(now);
+        AgentResponse response = marketRegimeAgent.analyze("NIFTY", now);
 
         assertEquals("SIDEWAYS", response.bias());
     }
@@ -82,10 +82,10 @@ class MarketRegimeAgentTest {
     @Test
     void tightFactor_doesNotFlagSameMarketAsSideways() {
         ReflectionTestUtils.setField(marketRegimeAgent, "sidewaysAtrFactor", 0.001); // threshold = 0.015 < 0.5
-        when(marketSnapshotRepository.findHistoryBefore(any(), any(Pageable.class)))
+        when(marketSnapshotRepository.findHistoryBeforeByInstrument(any(), any(), any(Pageable.class)))
                 .thenReturn(mildlyChoppyHistory()); // EMAs are null -> falls through to NEUTRAL
 
-        AgentResponse response = marketRegimeAgent.analyze(now);
+        AgentResponse response = marketRegimeAgent.analyze("NIFTY", now);
 
         assertEquals("NEUTRAL", response.bias());
     }
@@ -104,9 +104,9 @@ class MarketRegimeAgentTest {
         // Latest snapshot: spot > ema20 > ema50 => trending bullish
         history.get(0).setEma20(23520.0);
         history.get(0).setEma50(23500.0);
-        when(marketSnapshotRepository.findHistoryBefore(any(), any(Pageable.class))).thenReturn(history);
+        when(marketSnapshotRepository.findHistoryBeforeByInstrument(any(), any(), any(Pageable.class))).thenReturn(history);
 
-        AgentResponse response = marketRegimeAgent.analyze(now);
+        AgentResponse response = marketRegimeAgent.analyze("NIFTY", now);
 
         assertEquals("TRENDING_BULLISH", response.bias());
     }

@@ -20,13 +20,13 @@ public class MultiTimeframeAgent {
     private final MarketCandleRepository marketCandleRepository;
 
     public AgentResponse analyze() {
-        return analyze(LocalDateTime.now());
+        return analyze("NIFTY", LocalDateTime.now());
     }
 
     /** Higher timeframes checked for trend alignment, fastest → slowest. */
     private static final String[] TIMEFRAMES = {"5m", "15m", "30m", "60m"};
 
-    public AgentResponse analyze(LocalDateTime evaluationTime) {
+    public AgentResponse analyze(String instrument, LocalDateTime evaluationTime) {
         // P5-4: read the REAL per-timeframe OHLC candles (15m/30m/60m tables that updateCandle
         // writes) instead of reconstructing higher timeframes by indexing into 5m candles — the
         // old approach assumed 12 gap-free consecutive 5m bars and broke across day boundaries,
@@ -36,8 +36,8 @@ public class MultiTimeframeAgent {
         int totalChecked = 0;
 
         for (String tf : TIMEFRAMES) {
-            List<MarketCandle> candles = marketCandleRepository.findHistoryBefore(
-                    tf, evaluationTime, PageRequest.of(0, 1));
+            List<MarketCandle> candles = marketCandleRepository.findHistoryBeforeByInstrument(
+                    instrument, tf, evaluationTime, PageRequest.of(0, 1));
             if (candles.isEmpty() || candles.get(0).getOpen() == null || candles.get(0).getClose() == null) {
                 comments.add(tf + " Trend: INSUFFICIENT DATA");
                 continue;

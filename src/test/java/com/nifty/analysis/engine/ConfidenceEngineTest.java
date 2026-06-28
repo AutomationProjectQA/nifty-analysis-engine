@@ -75,10 +75,10 @@ class ConfidenceEngineTest {
         List<OptionSnapshotDto> chain = List.of(s1, s2);
 
         when(confidenceWeightRepository.findByActiveTrue()).thenReturn(Collections.emptyList());
-        when(marketRegimeAgent.analyze(now)).thenReturn(new AgentResponse(50.0, "NEUTRAL", List.of()));
+        when(marketRegimeAgent.analyze("NIFTY", now)).thenReturn(new AgentResponse(50.0, "NEUTRAL", List.of()));
         when(optionsAgent.analyze(chain, 23500.0, 10.0)).thenReturn(new AgentResponse(50.0, "NEUTRAL", List.of()));
         when(sentimentAgent.analyze()).thenReturn(new AgentResponse(50.0, "NEUTRAL", List.of()));
-        when(multiTimeframeAgent.analyze(now)).thenReturn(new AgentResponse(50.0, "NEUTRAL", List.of()));
+        when(multiTimeframeAgent.analyze("NIFTY", now)).thenReturn(new AgentResponse(50.0, "NEUTRAL", List.of()));
         
         // Mock overall PCR calculation to return a value that maps to a specific PCR score
         // We test BEARISH direction (isCall = false)

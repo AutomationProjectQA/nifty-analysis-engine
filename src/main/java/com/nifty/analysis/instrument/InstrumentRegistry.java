@@ -1,6 +1,7 @@
 package com.nifty.analysis.instrument;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
@@ -21,9 +22,11 @@ public class InstrumentRegistry {
 
     private final Map<String, InstrumentSpec> specs = new LinkedHashMap<>();
 
-    public InstrumentRegistry() {
+    public InstrumentRegistry(@Value("${nifty.instruments.banknifty-enabled:false}") boolean bankNiftyEnabled) {
         register(new InstrumentSpec("NIFTY", 50, 65, true));
-        register(new InstrumentSpec("BANKNIFTY", 100, 30, false)); // flip enabled=true once data client supports it
+        // BANKNIFTY: lot 30, strike step 100, Tuesday expiry. Default OFF so the live Nifty path is
+        // never affected; enable via nifty.instruments.banknifty-enabled (e.g. on the simulated provider).
+        register(new InstrumentSpec("BANKNIFTY", 100, 30, bankNiftyEnabled));
         log.info("Instrument registry initialised: {} ({} enabled).", specs.keySet(), active().size());
     }
 

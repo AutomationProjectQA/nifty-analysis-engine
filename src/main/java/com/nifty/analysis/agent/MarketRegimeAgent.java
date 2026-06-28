@@ -30,11 +30,12 @@ public class MarketRegimeAgent {
     private double sidewaysAtrFactor;
 
     public AgentResponse analyze() {
-        return analyze(LocalDateTime.now());
+        return analyze("NIFTY", LocalDateTime.now());
     }
 
-    public AgentResponse analyze(LocalDateTime evaluationTime) {
-        List<MarketSnapshot> history = marketSnapshotRepository.findHistoryBefore(
+    public AgentResponse analyze(String instrument, LocalDateTime evaluationTime) {
+        List<MarketSnapshot> history = marketSnapshotRepository.findHistoryBeforeByInstrument(
+                instrument,
                 evaluationTime,
                 PageRequest.of(0, 30));
 
@@ -61,7 +62,7 @@ public class MarketRegimeAgent {
                     .sum();
             double stdDev = Math.sqrt(sumSquares / history.size());
 
-            double atr = calculateAtr(evaluationTime);
+            double atr = calculateAtr(instrument, evaluationTime);
             double sidewaysThreshold = sidewaysAtrFactor * atr;
 
             // If price standard deviation over last 15-30 snapshots is less than 0.25 * ATR, it is sideways
@@ -90,9 +91,10 @@ public class MarketRegimeAgent {
         return new AgentResponse(50.0, "NEUTRAL", comments);
     }
 
-    private double calculateAtr(LocalDateTime evaluationTime) {
+    private double calculateAtr(String instrument, LocalDateTime evaluationTime) {
         try {
-            List<MarketCandle> candles = marketCandleRepository.findHistoryBefore(
+            List<MarketCandle> candles = marketCandleRepository.findHistoryBeforeByInstrument(
+                    instrument,
                     "5m",
                     evaluationTime,
                     PageRequest.of(0, 15));

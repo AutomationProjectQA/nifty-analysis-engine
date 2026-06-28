@@ -78,7 +78,7 @@ public class ConfidenceEngine {
         }
 
         // 2. Fetch agent scores (direction-aware)
-        double trendScoreVal = marketRegimeAgent.analyze(latest.getSnapshotTime()).score();
+        double trendScoreVal = marketRegimeAgent.analyze(latest.getInstrument(), latest.getSnapshotTime()).score();
         double trendScore = isCall ? trendScoreVal : 100.0 - trendScoreVal;
 
         Double rsi = latest.getRsi();
@@ -117,7 +117,7 @@ public class ConfidenceEngine {
 
         double sentimentScore = isCall ? sentimentAgent.analyze().score() : 100.0 - sentimentAgent.analyze().score();
 
-        double mtScoreVal = multiTimeframeAgent.analyze(latest.getSnapshotTime()).score();
+        double mtScoreVal = multiTimeframeAgent.analyze(latest.getInstrument(), latest.getSnapshotTime()).score();
         double mtScore = isCall ? mtScoreVal : 100.0 - mtScoreVal;
 
         // 3. Compute weighted confidence

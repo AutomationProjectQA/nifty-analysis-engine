@@ -47,26 +47,26 @@ class TechnicalIndicatorServiceTest {
     @Test
     void testEmaFromCandles() {
         // findHistoryBefore returns newest-first; reversed → [100,102,104,106], + live 108.
-        when(marketCandleRepository.findHistoryBefore(any(String.class), any(LocalDateTime.class), any(PageRequest.class)))
+        when(marketCandleRepository.findHistoryBeforeByInstrument(any(String.class), any(String.class), any(LocalDateTime.class), any(PageRequest.class)))
                 .thenReturn(List.of(candle(106), candle(104), candle(102), candle(100)));
-        double ema = technicalIndicatorService.calculateEmaFromCandles("5m", 3, LocalDateTime.now(), 108.0);
+        double ema = technicalIndicatorService.calculateEmaFromCandles("NIFTY", "5m", 3, LocalDateTime.now(), 108.0);
         // SMA(100,102,104)=102; α=0.5; →106*.5+102*.5=104; →108*.5+104*.5=106
         assertEquals(106.0, ema, 0.01);
     }
 
     @Test
     void testRsiFromCandles_allGains_is100() {
-        when(marketCandleRepository.findHistoryBefore(any(String.class), any(LocalDateTime.class), any(PageRequest.class)))
+        when(marketCandleRepository.findHistoryBeforeByInstrument(any(String.class), any(String.class), any(LocalDateTime.class), any(PageRequest.class)))
                 .thenReturn(List.of(candle(104), candle(103), candle(102), candle(101), candle(100)));
-        double rsi = technicalIndicatorService.calculateRsiFromCandles("5m", 3, LocalDateTime.now(), 105.0);
+        double rsi = technicalIndicatorService.calculateRsiFromCandles("NIFTY", "5m", 3, LocalDateTime.now(), 105.0);
         assertEquals(100.0, rsi, 0.01); // strictly rising → no losses → RSI 100
     }
 
     @Test
     void testRsiFromCandles_insufficientData_isNeutral() {
-        when(marketCandleRepository.findHistoryBefore(any(String.class), any(LocalDateTime.class), any(PageRequest.class)))
+        when(marketCandleRepository.findHistoryBeforeByInstrument(any(String.class), any(String.class), any(LocalDateTime.class), any(PageRequest.class)))
                 .thenReturn(List.of()); // only the live price → not enough
-        double rsi = technicalIndicatorService.calculateRsiFromCandles("5m", 14, LocalDateTime.now(), 105.0);
+        double rsi = technicalIndicatorService.calculateRsiFromCandles("NIFTY", "5m", 14, LocalDateTime.now(), 105.0);
         assertEquals(50.0, rsi, 0.01);
     }
 
@@ -134,11 +134,11 @@ class TechnicalIndicatorServiceTest {
         s2.setVolume(300.0);   // cumulative -> period 200
         s2.setSnapshotTime(evaluationTime.minusMinutes(2));
 
-        when(marketSnapshotRepository.findBetween(any(LocalDateTime.class), any(LocalDateTime.class)))
+        when(marketSnapshotRepository.findBetweenByInstrument(any(String.class), any(LocalDateTime.class), any(LocalDateTime.class)))
                 .thenReturn(List.of(s1, s2));
 
         // Act — current cumulative volume 600 -> period 300
-        double vwap = technicalIndicatorService.calculateVwap(23520.0, 600.0, evaluationTime);
+        double vwap = technicalIndicatorService.calculateVwap("NIFTY", 23520.0, 600.0, evaluationTime);
 
         // Assert — per-period volumes 100/200/300 (total 600)
         // Total Spot*Volume = (23500*100) + (23510*200) + (23520*300) = 14108000

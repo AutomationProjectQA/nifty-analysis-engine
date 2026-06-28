@@ -46,6 +46,8 @@ class MarketCollectorServiceTest {
     @Mock
     private MarketCandleRepository marketCandleRepository;
     @Mock
+    private com.nifty.analysis.instrument.InstrumentRegistry instrumentRegistry;
+    @Mock
     private TradeSignalRepository tradeSignalRepository;
     @Mock
     private TradeResultRepository tradeResultRepository;
@@ -87,6 +89,7 @@ class MarketCollectorServiceTest {
                 marketSnapshotRepository,
                 optionSnapshotRepository,
                 marketCandleRepository,
+                instrumentRegistry,
                 tradeSignalRepository,
                 tradeResultRepository,
                 redisService,
@@ -104,6 +107,9 @@ class MarketCollectorServiceTest {
         ReflectionTestUtils.setField(marketCollectorService, "lotSize", 65);
         // Large staleness window so the freshness gate doesn't trip on test timestamps / zone skew.
         ReflectionTestUtils.setField(marketCollectorService, "maxStalenessSeconds", 86400L);
+        // Pipeline runs for NIFTY only in tests.
+        lenient().when(instrumentRegistry.active()).thenReturn(
+                List.of(new com.nifty.analysis.instrument.InstrumentSpec("NIFTY", 50, 65, true)));
         // No theoretical-premium fallback by default; individual tests override as needed.
         lenient().when(optionPremiumService.latestPremiums())
                 .thenReturn(new com.nifty.analysis.dto.OptionPremiumDto.Response(0.0, "", 0, List.of()));
@@ -121,14 +127,14 @@ class MarketCollectorServiceTest {
                 10000L, 12000L, now);
         List<OptionSnapshotDto> optionDtos = List.of(optionDto);
 
-        when(marketDataClient.fetchMarketData()).thenReturn(marketDto);
-        when(optionChainClient.fetchOptionChain()).thenReturn(optionDtos);
-        when(technicalIndicatorService.calculateEmaFromCandles(any(String.class), anyInt(), any(LocalDateTime.class), anyDouble())).thenReturn(23500.0);
-        when(technicalIndicatorService.calculateRsiFromCandles(any(String.class), anyInt(), any(LocalDateTime.class), anyDouble())).thenReturn(50.0);
-        when(technicalIndicatorService.calculateVwap(anyDouble(), anyDouble(), any(LocalDateTime.class))).thenReturn(23500.0);
+        when(marketDataClient.fetchMarketData("NIFTY")).thenReturn(marketDto);
+        when(optionChainClient.fetchOptionChain("NIFTY")).thenReturn(optionDtos);
+        when(technicalIndicatorService.calculateEmaFromCandles(any(String.class), any(String.class), anyInt(), any(LocalDateTime.class), anyDouble())).thenReturn(23500.0);
+        when(technicalIndicatorService.calculateRsiFromCandles(any(String.class), any(String.class), anyInt(), any(LocalDateTime.class), anyDouble())).thenReturn(50.0);
+        when(technicalIndicatorService.calculateVwap(any(String.class), anyDouble(), anyDouble(), any(LocalDateTime.class))).thenReturn(23500.0);
         when(optionsIndicatorService.calculateMaxPain(anyList())).thenReturn(23500.0);
-        when(marketCandleRepository.findLatestByTimeframe(anyString(), anyInt())).thenReturn(List.of());
-        when(tradeSignalRepository.findByStatus("ACTIVE")).thenReturn(List.of());
+        when(marketCandleRepository.findLatestByInstrumentAndTimeframe(anyString(), anyString(), anyInt())).thenReturn(List.of());
+        when(tradeSignalRepository.findByInstrumentAndStatus("NIFTY", "ACTIVE")).thenReturn(List.of());
 
         // Act
         marketCollectorService.collect();
@@ -168,15 +174,15 @@ class MarketCollectorServiceTest {
 
         LocalDateTime now = com.nifty.analysis.util.TimeUtil.nowIst();
         MarketSnapshotDto marketDto = new MarketSnapshotDto(23500.0, 23530.0, 13.5, 100000.0, now);
-        when(marketDataClient.fetchMarketData()).thenReturn(marketDto);
-        when(optionChainClient.fetchOptionChain()).thenReturn(List.of(
+        when(marketDataClient.fetchMarketData("NIFTY")).thenReturn(marketDto);
+        when(optionChainClient.fetchOptionChain("NIFTY")).thenReturn(List.of(
                 new OptionSnapshotDto(23500, 50000L, 60000L, 1000L, 2000L, 12.5, 1.2, 23500.0, 10000L, 12000L, now)));
-        when(technicalIndicatorService.calculateEmaFromCandles(any(String.class), anyInt(), any(LocalDateTime.class), anyDouble())).thenReturn(23500.0);
-        when(technicalIndicatorService.calculateRsiFromCandles(any(String.class), anyInt(), any(LocalDateTime.class), anyDouble())).thenReturn(50.0);
-        when(technicalIndicatorService.calculateVwap(anyDouble(), anyDouble(), any(LocalDateTime.class))).thenReturn(23500.0);
+        when(technicalIndicatorService.calculateEmaFromCandles(any(String.class), any(String.class), anyInt(), any(LocalDateTime.class), anyDouble())).thenReturn(23500.0);
+        when(technicalIndicatorService.calculateRsiFromCandles(any(String.class), any(String.class), anyInt(), any(LocalDateTime.class), anyDouble())).thenReturn(50.0);
+        when(technicalIndicatorService.calculateVwap(any(String.class), anyDouble(), anyDouble(), any(LocalDateTime.class))).thenReturn(23500.0);
         when(optionsIndicatorService.calculateMaxPain(anyList())).thenReturn(23500.0);
-        when(marketCandleRepository.findLatestByTimeframe(anyString(), anyInt())).thenReturn(List.of());
-        when(tradeSignalRepository.findByStatus("ACTIVE")).thenReturn(List.of());
+        when(marketCandleRepository.findLatestByInstrumentAndTimeframe(anyString(), anyString(), anyInt())).thenReturn(List.of());
+        when(tradeSignalRepository.findByInstrumentAndStatus("NIFTY", "ACTIVE")).thenReturn(List.of());
 
         marketCollectorService.collect();
 
@@ -224,7 +230,7 @@ class MarketCollectorServiceTest {
         activeSignal.setTarget2(180.0);
         activeSignal.setStatus("ACTIVE");
 
-        when(tradeSignalRepository.findByStatus("ACTIVE")).thenReturn(List.of(activeSignal));
+        when(tradeSignalRepository.findByInstrumentAndStatus("NIFTY", "ACTIVE")).thenReturn(List.of(activeSignal));
 
         MarketSnapshot entrySnap = new MarketSnapshot();
         entrySnap.setNiftySpot(23500.0);
@@ -262,7 +268,7 @@ class MarketCollectorServiceTest {
         activeSignal.setTarget2(180.0);
         activeSignal.setStatus("ACTIVE");
 
-        when(tradeSignalRepository.findByStatus("ACTIVE")).thenReturn(List.of(activeSignal));
+        when(tradeSignalRepository.findByInstrumentAndStatus("NIFTY", "ACTIVE")).thenReturn(List.of(activeSignal));
         when(marketSnapshotRepository.findLatestBefore(any(LocalDateTime.class)))
                 .thenReturn(Optional.of(new MarketSnapshot()));
         // Live LTP unavailable (sentinel) ...
@@ -296,7 +302,7 @@ class MarketCollectorServiceTest {
         activeSignal.setTarget2(180.0);
         activeSignal.setStatus("ACTIVE");
 
-        when(tradeSignalRepository.findByStatus("ACTIVE")).thenReturn(List.of(activeSignal));
+        when(tradeSignalRepository.findByInstrumentAndStatus("NIFTY", "ACTIVE")).thenReturn(List.of(activeSignal));
         when(marketSnapshotRepository.findLatestBefore(any(LocalDateTime.class)))
                 .thenReturn(Optional.of(new MarketSnapshot()));
         when(optionPricingService.getOptionLtp("BUY_CE", 23500)).thenReturn(-1.0);
@@ -327,7 +333,7 @@ class MarketCollectorServiceTest {
         activeSignal.setQuantity(65);
         activeSignal.setStatus("ACTIVE");
 
-        when(tradeSignalRepository.findByStatus("ACTIVE")).thenReturn(List.of(activeSignal));
+        when(tradeSignalRepository.findByInstrumentAndStatus("NIFTY", "ACTIVE")).thenReturn(List.of(activeSignal));
         when(marketSnapshotRepository.findLatestBefore(any(LocalDateTime.class)))
                 .thenReturn(Optional.of(new MarketSnapshot()));
         when(optionPricingService.getOptionLtp("BUY_CE", 23500)).thenReturn(182.0); // >= target2 180

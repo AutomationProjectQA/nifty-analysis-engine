@@ -13,7 +13,13 @@ public interface TradeSignalRepository extends JpaRepository<TradeSignal, Long> 
     long countByStatus(String status);
 
     java.util.Optional<TradeSignal> findFirstByStrikeAndSignalTypeAndStatus(int strike, String signalType, String status);
-    
+
+    // --- P5-2 instrument-scoped variants (concurrent-position cap stays GLOBAL via countByStatus) ---
+    List<TradeSignal> findByInstrumentAndStatus(String instrument, String status);
+
+    java.util.Optional<TradeSignal> findFirstByInstrumentAndStrikeAndSignalTypeAndStatus(
+            String instrument, int strike, String signalType, String status);
+
     List<TradeSignal> findBySignalTimeAfter(java.time.LocalDateTime time);
 
     List<TradeSignal> findAllByOrderBySignalTimeDesc();
