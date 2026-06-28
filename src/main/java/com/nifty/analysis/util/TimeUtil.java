@@ -65,6 +65,11 @@ public final class TimeUtil {
         return expiryDay;
     }
 
+    /** True if {@code date} is a configured NSE trading holiday (excludes weekends — check those separately). */
+    public static boolean isExchangeHoliday(LocalDate date) {
+        return holidays.contains(date);
+    }
+
     /** Next NIFTY weekly expiry on/after {@code from}: live instrument data if available, else holiday-aware weekday. */
     public static LocalDate nextWeeklyExpiry(LocalDate from) {
         ExpiryInstrumentSource src = instrumentSource;

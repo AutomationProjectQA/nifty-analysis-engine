@@ -55,6 +55,11 @@ public class MarketCollectorService {
     @org.springframework.beans.factory.annotation.Value("${nifty.order-execution.lot-size:65}")
     private int lotSize;
 
+    // P5-5: reject a stale/frozen feed before opening new positions. A tick is stale if it is
+    // older than this many seconds, or not newer than the previous snapshot (duplicate/frozen feed).
+    @org.springframework.beans.factory.annotation.Value("${nifty.collector.max-staleness-seconds:120}")
+    private long maxStalenessSeconds;
+
     // NOT @Transactional on purpose: this cycle interleaves blocking external HTTP (Angel
     // One, LLM, Telegram, order placement) with DB writes. Wrapping it all in one
     // transaction would pin a DB connection across those slow calls (pool exhaustion).
@@ -132,9 +137,16 @@ public class MarketCollectorService {
             updateCandle(marketData.niftySpot(), marketData.volume(), now, "30m");
             updateCandle(marketData.niftySpot(), marketData.volume(), now, "60m");
 
-            // 4. Trigger Decision Agent signal evaluations
-            decisionAgent.evaluateMarketForSignals(snapshot,
-                    prevSnapshot.map(MarketSnapshot::getNiftySpot).orElse(null));
+            // 4. Trigger Decision Agent signal evaluations — but only on a FRESH feed. A frozen or
+            // lagging feed would otherwise open new positions on dead prices (P5-5 freshness gate).
+            LocalDateTime prevTime = prevSnapshot.map(MarketSnapshot::getSnapshotTime).orElse(null);
+            if (isFeedStale(marketData.timestamp(), prevTime, now, maxStalenessSeconds)) {
+                log.warn("Stale/frozen feed (tick={}, prev={}, now={}). Skipping signal generation this cycle.",
+                        marketData.timestamp(), prevTime, now);
+            } else {
+                decisionAgent.evaluateMarketForSignals(snapshot,
+                        prevSnapshot.map(MarketSnapshot::getNiftySpot).orElse(null));
+            }
 
             // 5. Update and resolve active trade signals in real-time
             updateActiveTrades(snapshot);
@@ -192,6 +204,21 @@ public class MarketCollectorService {
         marketCandleRepository.save(candle);
         log.debug("Candle ({}) updated: Timestamp={}, Open={}, Close={}, Volume={}",
                 timeframe, candle.getTimestamp(), candle.getOpen(), candle.getClose(), candle.getVolume());
+    }
+
+    /**
+     * Feed-freshness check (pure, unit-tested). A tick is stale if it is older than
+     * {@code maxStalenessSeconds} relative to now, or is not strictly newer than the previous
+     * snapshot (a duplicate/frozen feed repeating the same tick).
+     */
+    static boolean isFeedStale(LocalDateTime tickTime, LocalDateTime prevTime, LocalDateTime now, long maxStalenessSeconds) {
+        if (tickTime == null) {
+            return true;
+        }
+        if (prevTime != null && !tickTime.isAfter(prevTime)) {
+            return true; // duplicate / frozen feed
+        }
+        return java.time.Duration.between(tickTime, now).getSeconds() > maxStalenessSeconds;
     }
 
     /** True once today (IST) is past the weekly expiry (Tuesday on/after) of the signal's date. */

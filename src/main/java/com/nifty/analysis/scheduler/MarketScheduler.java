@@ -28,18 +28,8 @@ public class MarketScheduler {
 
     @Scheduled(cron = "${nifty.collector.cron:0 * * * * *}")
     public void collectData() {
-        if (marketHoursOnly) {
-            ZonedDateTime nowIst = ZonedDateTime.now(ZoneId.of("Asia/Kolkata"));
-            DayOfWeek day = nowIst.getDayOfWeek();
-            LocalTime time = nowIst.toLocalTime();
-
-            boolean isWeekday = (day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY);
-            boolean isMarketHours = !time.isBefore(LocalTime.of(9, 15)) && !time.isAfter(LocalTime.of(15, 30));
-
-            if (!isWeekday || !isMarketHours) {
-                log.info("Current IST: {}. Skipping scheduled collection (outside Indian market hours).", nowIst);
-                return;
-            }
+        if (marketHoursOnly && isMarketClosedNow("collection")) {
+            return;
         }
 
         // Skip this tick if the previous cycle is still running.
@@ -56,20 +46,31 @@ public class MarketScheduler {
 
     @Scheduled(cron = "${nifty.cron-summary:0 */30 * * * *}")
     public void send30MinUpdate() {
-        if (marketHoursOnly) {
-            ZonedDateTime nowIst = ZonedDateTime.now(ZoneId.of("Asia/Kolkata"));
-            DayOfWeek day = nowIst.getDayOfWeek();
-            LocalTime time = nowIst.toLocalTime();
-            
-            boolean isWeekday = (day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY);
-            boolean isMarketHours = !time.isBefore(LocalTime.of(9, 15)) && !time.isAfter(LocalTime.of(15, 30));
-            
-            if (!isWeekday || !isMarketHours) {
-                log.info("Current IST: {}. Skipping scheduled 30-min update (outside Indian market hours).", nowIst);
-                return;
-            }
+        if (marketHoursOnly && isMarketClosedNow("30-min update")) {
+            return;
         }
-        
+
         marketCollectorService.send30MinSummary();
+    }
+
+    /**
+     * True when the IST market is closed right now: weekend, NSE trading holiday, or outside
+     * 09:15–15:30. Holidays come from the configured calendar in {@link com.nifty.analysis.util.TimeUtil}.
+     */
+    private boolean isMarketClosedNow(String activity) {
+        ZonedDateTime nowIst = ZonedDateTime.now(ZoneId.of("Asia/Kolkata"));
+        DayOfWeek day = nowIst.getDayOfWeek();
+        LocalTime time = nowIst.toLocalTime();
+
+        boolean weekend = (day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY);
+        boolean holiday = com.nifty.analysis.util.TimeUtil.isExchangeHoliday(nowIst.toLocalDate());
+        boolean marketHours = !time.isBefore(LocalTime.of(9, 15)) && !time.isAfter(LocalTime.of(15, 30));
+
+        if (weekend || holiday || !marketHours) {
+            log.info("Current IST: {}. Skipping scheduled {} ({}).", nowIst, activity,
+                    holiday ? "NSE holiday" : (weekend ? "weekend" : "outside market hours"));
+            return true;
+        }
+        return false;
     }
 }

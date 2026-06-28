@@ -9,6 +9,8 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TimeUtilTest {
 
@@ -59,5 +61,12 @@ class TimeUtilTest {
     void layer3_configurableExpiryDay() {
         TimeUtil.configureExpiry(DayOfWeek.THURSDAY, Set.of(), null);
         assertEquals(LocalDate.of(2026, 6, 25), TimeUtil.nextWeeklyExpiry(LocalDate.of(2026, 6, 23))); // Tue → next Thu
+    }
+
+    @Test
+    void isExchangeHoliday_reflectsConfiguredSet() {
+        TimeUtil.configureExpiry(DayOfWeek.TUESDAY, Set.of(LocalDate.of(2026, 1, 26)), null);
+        assertTrue(TimeUtil.isExchangeHoliday(LocalDate.of(2026, 1, 26)));   // Republic Day
+        assertFalse(TimeUtil.isExchangeHoliday(LocalDate.of(2026, 1, 27)));
     }
 }

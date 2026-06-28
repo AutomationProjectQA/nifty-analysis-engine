@@ -215,7 +215,11 @@ nifty:
     
     # Cron expression for data collection scheduler (default: every 1 minute)
     cron: "0 * * * * *"
-    
+
+    # P5-5 freshness gate: skip NEW signal generation if the tick is older than this (seconds)
+    # or is a duplicate of the previous snapshot (frozen feed). Protects against trading dead data.
+    max-staleness-seconds: 120
+
   # Telegram Notification Configuration
   telegram:
     enabled: true

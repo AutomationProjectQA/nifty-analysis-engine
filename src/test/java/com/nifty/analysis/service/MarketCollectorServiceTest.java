@@ -102,6 +102,8 @@ class MarketCollectorServiceTest {
                 confidenceWeightTuner
         );
         ReflectionTestUtils.setField(marketCollectorService, "lotSize", 65);
+        // Large staleness window so the freshness gate doesn't trip on test timestamps / zone skew.
+        ReflectionTestUtils.setField(marketCollectorService, "maxStalenessSeconds", 86400L);
         // No theoretical-premium fallback by default; individual tests override as needed.
         lenient().when(optionPremiumService.latestPremiums())
                 .thenReturn(new com.nifty.analysis.dto.OptionPremiumDto.Response(0.0, "", 0, List.of()));
@@ -154,6 +156,33 @@ class MarketCollectorServiceTest {
         
         // Verify decision agent signal checks trigger at end of collection
         verify(decisionAgent, times(1)).evaluateMarketForSignals(any(MarketSnapshot.class), any());
+    }
+
+    @Test
+    void isFeedStale_freshTickPasses() {
+        LocalDateTime now = LocalDateTime.of(2026, 6, 23, 11, 0, 30);
+        LocalDateTime tick = LocalDateTime.of(2026, 6, 23, 11, 0, 0);   // 30s old
+        LocalDateTime prev = LocalDateTime.of(2026, 6, 23, 10, 59, 0);  // strictly older
+        assertFalse(MarketCollectorService.isFeedStale(tick, prev, now, 120));
+    }
+
+    @Test
+    void isFeedStale_tooOldIsStale() {
+        LocalDateTime now = LocalDateTime.of(2026, 6, 23, 11, 5, 0);
+        LocalDateTime tick = LocalDateTime.of(2026, 6, 23, 11, 0, 0);   // 5 min old > 120s
+        assertTrue(MarketCollectorService.isFeedStale(tick, null, now, 120));
+    }
+
+    @Test
+    void isFeedStale_duplicateOfPrevIsStale() {
+        LocalDateTime now = LocalDateTime.of(2026, 6, 23, 11, 0, 5);
+        LocalDateTime tick = LocalDateTime.of(2026, 6, 23, 11, 0, 0);
+        assertTrue(MarketCollectorService.isFeedStale(tick, tick, now, 120)); // not newer than prev → frozen
+    }
+
+    @Test
+    void isFeedStale_nullTickIsStale() {
+        assertTrue(MarketCollectorService.isFeedStale(null, null, LocalDateTime.now(), 120));
     }
 
     @Test
