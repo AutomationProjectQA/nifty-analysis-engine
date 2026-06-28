@@ -19,6 +19,10 @@ public class TradeSignal {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    // P5-2: which instrument this signal is for (NIFTY, BANKNIFTY, ...). Defaults to NIFTY.
+    @Column(name = "instrument", nullable = false)
+    private String instrument = "NIFTY";
+
     @Column(name = "signal_time", nullable = false)
     private LocalDateTime signalTime;
 

@@ -19,6 +19,10 @@ public class MarketCandle {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    // P5-2: which instrument this candle belongs to (NIFTY, BANKNIFTY, ...). Defaults to NIFTY.
+    @Column(name = "instrument", nullable = false)
+    private String instrument = "NIFTY";
+
     @Column(name = "timestamp", nullable = false)
     private LocalDateTime timestamp;
 

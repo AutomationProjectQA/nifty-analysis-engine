@@ -19,6 +19,10 @@ public class OptionSnapshot {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    // P5-2: which instrument this row belongs to (NIFTY, BANKNIFTY, ...). Defaults to NIFTY.
+    @Column(name = "instrument", nullable = false)
+    private String instrument = "NIFTY";
+
     @Column(name = "snapshot_time", nullable = false)
     private LocalDateTime snapshotTime;
 

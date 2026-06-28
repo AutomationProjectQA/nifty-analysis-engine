@@ -193,9 +193,17 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient,
     }
 
     @Override
-    public MarketSnapshotDto fetchMarketData() {
+    public MarketSnapshotDto fetchMarketData(String instrument) {
         ensureAuthenticated();
-        
+
+        // Live quote-fetch is wired for NIFTY only. Other instruments fall back to simulated data
+        // (which block-on-simulated-data refuses to trade) until their live tokens/symbols are
+        // resolved + validated on the VM. NIFTY behaviour below is unchanged.
+        if (!"NIFTY".equals(instrument)) {
+            log.warn("Live Angel One fetch not yet wired for {}. Returning SIMULATED fallback (won't trade live).", instrument);
+            return getSimulatedFallbackMarketData();
+        }
+
         // If credentials are simulated, return simulated data
         if ("SIMULATED_JWT_TOKEN".equals(jwtToken)) {
             return getSimulatedFallbackMarketData();
@@ -317,8 +325,13 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient,
     }
 
     @Override
-    public List<OptionSnapshotDto> fetchOptionChain() {
+    public List<OptionSnapshotDto> fetchOptionChain(String instrument) {
         ensureAuthenticated();
+
+        if (!"NIFTY".equals(instrument)) {
+            log.warn("Live Angel One option chain not yet wired for {}. Returning SIMULATED fallback.", instrument);
+            return getSimulatedFallbackOptions();
+        }
 
         if ("SIMULATED_JWT_TOKEN".equals(jwtToken)) {
             return getSimulatedFallbackOptions();
