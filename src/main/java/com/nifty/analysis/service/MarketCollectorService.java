@@ -60,10 +60,32 @@ public class MarketCollectorService {
     @org.springframework.beans.factory.annotation.Value("${nifty.collector.max-staleness-seconds:120}")
     private long maxStalenessSeconds;
 
+    // Shared non-reentrancy guard: the 1-min scheduler AND the intraday event trigger (P5-3) both
+    // run cycles through tryCollect(), so they can never overlap and double-open positions.
+    private final java.util.concurrent.atomic.AtomicBoolean cycleRunning =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    /**
+     * Runs a collection cycle unless one is already in progress. Returns true if it actually ran.
+     * Callers (scheduler, event trigger) share this guard so cycles are strictly serialized.
+     */
+    public boolean tryCollect() {
+        if (!cycleRunning.compareAndSet(false, true)) {
+            log.warn("Collection cycle already running — skipping this trigger to avoid overlap.");
+            return false;
+        }
+        try {
+            collect();
+            return true;
+        } finally {
+            cycleRunning.set(false);
+        }
+    }
+
     // NOT @Transactional on purpose: this cycle interleaves blocking external HTTP (Angel
     // One, LLM, Telegram, order placement) with DB writes. Wrapping it all in one
     // transaction would pin a DB connection across those slow calls (pool exhaustion).
-    // Each persistence step commits independently; the scheduler guard ensures the cycle
+    // Each persistence step commits independently; tryCollect() ensures the cycle
     // is never re-entered concurrently.
     public void collect() {
         log.info("Starting market and option chain data collection cycle...");

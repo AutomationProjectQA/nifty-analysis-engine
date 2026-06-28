@@ -19,10 +19,6 @@ public class MarketScheduler {
 
     private final MarketCollectorService marketCollectorService;
 
-    // Non-reentrancy guard: if a collection cycle runs longer than the schedule interval,
-    // skip the next tick instead of overlapping (which could double-generate signals/orders).
-    private final java.util.concurrent.atomic.AtomicBoolean collecting = new java.util.concurrent.atomic.AtomicBoolean(false);
-
     @Value("${nifty.collector.market-hours-only:false}")
     private boolean marketHoursOnly;
 
@@ -31,17 +27,8 @@ public class MarketScheduler {
         if (marketHoursOnly && isMarketClosedNow("collection")) {
             return;
         }
-
-        // Skip this tick if the previous cycle is still running.
-        if (!collecting.compareAndSet(false, true)) {
-            log.warn("Previous collection cycle still running — skipping this tick to avoid overlap.");
-            return;
-        }
-        try {
-            marketCollectorService.collect();
-        } finally {
-            collecting.set(false);
-        }
+        // tryCollect() owns the shared non-reentrancy guard (also used by the intraday event trigger).
+        marketCollectorService.tryCollect();
     }
 
     @Scheduled(cron = "${nifty.cron-summary:0 */30 * * * *}")

@@ -220,6 +220,14 @@ nifty:
     # or is a duplicate of the previous snapshot (frozen feed). Protects against trading dead data.
     max-staleness-seconds: 120
 
+  # P5-3 intraday event trigger: fire a full evaluation between 1-min cycles on a VWAP cross or a
+  # break of the previous 15m candle's high/low. Shares the collector's guard (no overlap); cooldown
+  # prevents signal spam. The 1-min scheduler stays as the backstop.
+  trigger:
+    enabled: true
+    check-interval-ms: 5000
+    cooldown-seconds: 30
+
   # Telegram Notification Configuration
   telegram:
     enabled: true
