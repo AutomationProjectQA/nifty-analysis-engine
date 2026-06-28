@@ -159,6 +159,31 @@ class MarketCollectorServiceTest {
     }
 
     @Test
+    void asyncDecisions_stillEvaluatesViaExecutor() {
+        // With async on, the decision runs on the executor — use a same-thread executor so the
+        // verify is deterministic, proving the dispatch path still invokes evaluation exactly once.
+        ReflectionTestUtils.setField(marketCollectorService, "asyncDecisions", true);
+        ReflectionTestUtils.setField(marketCollectorService, "decisionExecutor",
+                (java.util.concurrent.Executor) Runnable::run);
+
+        LocalDateTime now = com.nifty.analysis.util.TimeUtil.nowIst();
+        MarketSnapshotDto marketDto = new MarketSnapshotDto(23500.0, 23530.0, 13.5, 100000.0, now);
+        when(marketDataClient.fetchMarketData()).thenReturn(marketDto);
+        when(optionChainClient.fetchOptionChain()).thenReturn(List.of(
+                new OptionSnapshotDto(23500, 50000L, 60000L, 1000L, 2000L, 12.5, 1.2, 23500.0, 10000L, 12000L, now)));
+        when(technicalIndicatorService.calculateEmaFromCandles(any(String.class), anyInt(), any(LocalDateTime.class), anyDouble())).thenReturn(23500.0);
+        when(technicalIndicatorService.calculateRsiFromCandles(any(String.class), anyInt(), any(LocalDateTime.class), anyDouble())).thenReturn(50.0);
+        when(technicalIndicatorService.calculateVwap(anyDouble(), anyDouble(), any(LocalDateTime.class))).thenReturn(23500.0);
+        when(optionsIndicatorService.calculateMaxPain(anyList())).thenReturn(23500.0);
+        when(marketCandleRepository.findLatestByTimeframe(anyString(), anyInt())).thenReturn(List.of());
+        when(tradeSignalRepository.findByStatus("ACTIVE")).thenReturn(List.of());
+
+        marketCollectorService.collect();
+
+        verify(decisionAgent, times(1)).evaluateMarketForSignals(any(MarketSnapshot.class), any());
+    }
+
+    @Test
     void isFeedStale_freshTickPasses() {
         LocalDateTime now = LocalDateTime.of(2026, 6, 23, 11, 0, 30);
         LocalDateTime tick = LocalDateTime.of(2026, 6, 23, 11, 0, 0);   // 30s old

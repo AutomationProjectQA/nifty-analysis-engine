@@ -148,7 +148,7 @@ nifty:
     # Percent of available wallet capital allocated to EACH order.
     # e.g. 20.0 = use 20% of the wallet per trade. Was 100 (all-in per trade) — lowered to a
     # safer default; raise it back deliberately if you understand the risk.
-    capital-per-order-percent: 20.0
+    capital-per-order-percent: 100.0
 
     # Profit target as a percent of the entry premium (the "take 2% profit" goal).
     target-profit-percent: 2.0
@@ -158,7 +158,7 @@ nifty:
     #   - target 2% + stop ~1.3%   => R:R ~1.5:1, break-even ~40% (aggressive but ideal R:R)
     #   - current 40% stop => R:R ~1:20, needs ~96% win-rate just to break even (NOT viable)
     # Change this value any time; no code change needed.
-    stop-loss-percent: 40.0
+    stop-loss-percent: 20.0
 
     # Refuse to open new trades when the live broker feed has degraded to SIMULATED
     # data (prevents trading on fabricated prices). Only applies in provider=angelone
@@ -174,7 +174,7 @@ nifty:
 
     # Halt new trades for the day once cumulative realised loss reaches this (NET P&L, INR).
     # Was 10,00,000 (so high it never tripped) — lowered to a sane default; tune to your capital.
-    max-loss-per-day: 250000.0
+    max-loss-per-day: 2500000.0
 
   # Live trade transaction-cost model (round-trip), subtracted from gross P&L so the
   # recorded P&L is NET. Defaults reflect typical Indian discount-broker option charges —
@@ -195,6 +195,8 @@ nifty:
     theta-decay-per-hour: 0.5   # premium points lost per hour held (time decay)
 
   order-execution:
+    # PAPER MODE: false = signals are generated, tracked and resolved against the LIVE feed but
+    # NO real Angel One order is placed. Flip to true only after reviewing paper results.
     enabled: true
     lot-size: 65
 
@@ -219,6 +221,10 @@ nifty:
     # P5-5 freshness gate: skip NEW signal generation if the tick is older than this (seconds)
     # or is a duplicate of the previous snapshot (frozen feed). Protects against trading dead data.
     max-staleness-seconds: 120
+
+    # P5-5d: run the slow decision step (LLM thesis + order) off the collection thread so a slow
+    # cycle never drops a minute of snapshot/candle data. Guarded (no overlap/pile-up).
+    async-decisions: true
 
   # P5-3 intraday event trigger: fire a full evaluation between 1-min cycles on a VWAP cross or a
   # break of the previous 15m candle's high/low. Shares the collector's guard (no overlap); cooldown

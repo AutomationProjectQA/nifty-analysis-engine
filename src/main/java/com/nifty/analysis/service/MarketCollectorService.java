@@ -60,6 +60,27 @@ public class MarketCollectorService {
     @org.springframework.beans.factory.annotation.Value("${nifty.collector.max-staleness-seconds:120}")
     private long maxStalenessSeconds;
 
+    // P5-5d: run the SLOW decision step (LLM thesis + order placement) off the collection thread so a
+    // slow cycle never drops a minute of snapshot/candle data. Guarded + single-threaded so decisions
+    // can't overlap (no double-open) and can't pile up (stale evaluations are skipped, not queued).
+    @org.springframework.beans.factory.annotation.Value("${nifty.collector.async-decisions:true}")
+    private boolean asyncDecisions;
+    private final java.util.concurrent.atomic.AtomicBoolean decisionRunning =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+    private java.util.concurrent.Executor decisionExecutor =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "decision-runner");
+                t.setDaemon(true);
+                return t;
+            });
+
+    @jakarta.annotation.PreDestroy
+    public void shutdownDecisionExecutor() {
+        if (decisionExecutor instanceof java.util.concurrent.ExecutorService es) {
+            es.shutdown();
+        }
+    }
+
     // Shared non-reentrancy guard: the 1-min scheduler AND the intraday event trigger (P5-3) both
     // run cycles through tryCollect(), so they can never overlap and double-open positions.
     private final java.util.concurrent.atomic.AtomicBoolean cycleRunning =
@@ -166,8 +187,7 @@ public class MarketCollectorService {
                 log.warn("Stale/frozen feed (tick={}, prev={}, now={}). Skipping signal generation this cycle.",
                         marketData.timestamp(), prevTime, now);
             } else {
-                decisionAgent.evaluateMarketForSignals(snapshot,
-                        prevSnapshot.map(MarketSnapshot::getNiftySpot).orElse(null));
+                dispatchDecision(snapshot, prevSnapshot.map(MarketSnapshot::getNiftySpot).orElse(null));
             }
 
             // 5. Update and resolve active trade signals in real-time
@@ -226,6 +246,32 @@ public class MarketCollectorService {
         marketCandleRepository.save(candle);
         log.debug("Candle ({}) updated: Timestamp={}, Open={}, Close={}, Volume={}",
                 timeframe, candle.getTimestamp(), candle.getOpen(), candle.getClose(), candle.getVolume());
+    }
+
+    /**
+     * Runs the decision/evaluation step. Synchronous when {@code asyncDecisions} is off (tests /
+     * opt-out). Otherwise off-loads it to a single-thread executor — guarded so a slow LLM/order
+     * step can't delay data collection (no dropped minute), can't overlap (no double-open), and
+     * can't pile up (a still-running decision means this cycle's evaluation is skipped).
+     */
+    private void dispatchDecision(MarketSnapshot snapshot, Double prevSpot) {
+        if (!asyncDecisions) {
+            decisionAgent.evaluateMarketForSignals(snapshot, prevSpot);
+            return;
+        }
+        if (!decisionRunning.compareAndSet(false, true)) {
+            log.warn("Previous decision still running — skipping this cycle's evaluation to keep data collection on time.");
+            return;
+        }
+        decisionExecutor.execute(() -> {
+            try {
+                decisionAgent.evaluateMarketForSignals(snapshot, prevSpot);
+            } catch (Exception e) {
+                log.error("Async decision evaluation failed", e);
+            } finally {
+                decisionRunning.set(false);
+            }
+        });
     }
 
     /**
