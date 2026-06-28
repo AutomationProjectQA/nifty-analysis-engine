@@ -29,6 +29,11 @@ public class BlackScholesService {
      * @return theoretical premium (>= 0)
      */
     public double price(double spot, double strike, double ivPercent, double years, boolean isCall) {
+        return Math.max(0.0, Math.round(priceRaw(spot, strike, ivPercent, years, isCall) * 100.0) / 100.0);
+    }
+
+    /** Unrounded premium — used by the IV solver so rounding doesn't zero out vega near ATM. */
+    private double priceRaw(double spot, double strike, double ivPercent, double years, boolean isCall) {
         double sigma = Math.max(ivPercent, 0.01) / 100.0;
         double t = Math.max(years, 1.0 / 365.0); // floor at ~1 day
         if (spot <= 0 || strike <= 0) {
@@ -40,11 +45,9 @@ public class BlackScholesService {
         double d2 = d1 - sigma * sqrtT;
         double discountedK = strike * Math.exp(-RISK_FREE_RATE * t);
 
-        double premium = isCall
+        return isCall
                 ? spot * normCdf(d1) - discountedK * normCdf(d2)
                 : discountedK * normCdf(-d2) - spot * normCdf(-d1);
-
-        return Math.max(0.0, Math.round(premium * 100.0) / 100.0);
     }
 
     /**
@@ -64,15 +67,16 @@ public class BlackScholesService {
             return -1.0; // no time value to invert
         }
         double sigma = 0.20; // initial guess: 20%
-        for (int i = 0; i < 60; i++) {
-            double price = price(spot, strike, sigma * 100.0, years, isCall);
+        for (int i = 0; i < 100; i++) {
+            // Use the UNROUNDED price so the finite-difference vega doesn't collapse to 0.
+            double price = priceRaw(spot, strike, sigma * 100.0, years, isCall);
             double diff = price - marketPrice;
-            if (Math.abs(diff) < 0.01) {
+            if (Math.abs(diff) < 0.001) {
                 break;
             }
-            double ds = 0.0001;
-            double vega = (price(spot, strike, (sigma + ds) * 100.0, years, isCall) - price) / ds;
-            if (Math.abs(vega) < 1e-8) {
+            double ds = Math.max(1e-4, sigma * 0.001); // relative sigma bump
+            double vega = (priceRaw(spot, strike, (sigma + ds) * 100.0, years, isCall) - price) / ds;
+            if (Math.abs(vega) < 1e-10) {
                 break;
             }
             sigma -= diff / vega;

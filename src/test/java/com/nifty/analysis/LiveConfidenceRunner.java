@@ -118,7 +118,8 @@ public class LiveConfidenceRunner {
 
         // 5. Evaluate indicators using the real business logic
         var mockSnapshotRepo = org.mockito.Mockito.mock(com.nifty.analysis.repository.MarketSnapshotRepository.class);
-        var technicalIndicatorService = new com.nifty.analysis.service.TechnicalIndicatorService(mockSnapshotRepo);
+        var mockCandleRepo = org.mockito.Mockito.mock(com.nifty.analysis.repository.MarketCandleRepository.class);
+        var technicalIndicatorService = new com.nifty.analysis.service.TechnicalIndicatorService(mockSnapshotRepo, mockCandleRepo);
         TechnicalAgent technicalAgent = new TechnicalAgent(technicalIndicatorService);
         AgentResponse techResponse = technicalAgent.analyze(snapshot);
         System.out.println("\n--- Technical Agent Bias ---");

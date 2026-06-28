@@ -9,9 +9,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.time.DayOfWeek;
 import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
 import java.util.List;
 
@@ -49,8 +47,8 @@ public class OptionPremiumService {
             spot = chain.stream().mapToInt(OptionSnapshot::getStrikePrice).average().orElse(0.0);
         }
 
-        LocalDate expiry = nextWeeklyExpiry(com.nifty.analysis.util.TimeUtil.todayIst());
-        long days = Math.max(0, ChronoUnit.DAYS.between(com.nifty.analysis.util.TimeUtil.todayIst(), expiry));
+        LocalDate expiry = com.nifty.analysis.util.TimeUtil.nextWeeklyExpiry(com.nifty.analysis.util.TimeUtil.todayIst());
+        long days = com.nifty.analysis.util.TimeUtil.daysToWeeklyExpiry(com.nifty.analysis.util.TimeUtil.todayIst());
         double years = days / 365.0;
 
         final double spotFinal = spot;
@@ -67,14 +65,5 @@ public class OptionPremiumService {
 
         return new OptionPremiumDto.Response(
                 Math.round(spotFinal * 100.0) / 100.0, expiry.toString(), days, premiums);
-    }
-
-    /** Next Thursday (Nifty weekly expiry); rolls to next week if today is past Thursday. */
-    private LocalDate nextWeeklyExpiry(LocalDate today) {
-        LocalDate d = today;
-        while (d.getDayOfWeek() != DayOfWeek.THURSDAY) {
-            d = d.plusDays(1);
-        }
-        return d;
     }
 }

@@ -121,8 +121,8 @@ class MarketCollectorServiceTest {
 
         when(marketDataClient.fetchMarketData()).thenReturn(marketDto);
         when(optionChainClient.fetchOptionChain()).thenReturn(optionDtos);
-        when(technicalIndicatorService.calculateEma(anyDouble(), any(), anyInt())).thenReturn(23500.0);
-        when(technicalIndicatorService.calculateRsi(anyDouble(), any(LocalDateTime.class))).thenReturn(50.0);
+        when(technicalIndicatorService.calculateEmaFromCandles(any(String.class), anyInt(), any(LocalDateTime.class), anyDouble())).thenReturn(23500.0);
+        when(technicalIndicatorService.calculateRsiFromCandles(any(String.class), anyInt(), any(LocalDateTime.class), anyDouble())).thenReturn(50.0);
         when(technicalIndicatorService.calculateVwap(anyDouble(), anyDouble(), any(LocalDateTime.class))).thenReturn(23500.0);
         when(optionsIndicatorService.calculateMaxPain(anyList())).thenReturn(23500.0);
         when(marketCandleRepository.findLatestByTimeframe(anyString(), anyInt())).thenReturn(List.of());

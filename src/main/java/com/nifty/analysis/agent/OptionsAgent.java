@@ -106,17 +106,25 @@ public class OptionsAgent {
             OptionSnapshot newestAtm = historicalAtms.get(0);
             OptionSnapshot oldestAtm = historicalAtms.get(historicalAtms.size() - 1);
             
-            long ceOiChange5m = (newestAtm.getCeOi() != null ? newestAtm.getCeOi() : 0L) - (oldestAtm.getCeOi() != null ? oldestAtm.getCeOi() : 0L);
-            long peOiChange5m = (newestAtm.getPeOi() != null ? newestAtm.getPeOi() : 0L) - (oldestAtm.getPeOi() != null ? oldestAtm.getPeOi() : 0L);
-            
-            if (ceOiChange5m > 100000) {
+            long ceNow = newestAtm.getCeOi() != null ? newestAtm.getCeOi() : 0L;
+            long peNow = newestAtm.getPeOi() != null ? newestAtm.getPeOi() : 0L;
+            long ceOiChange5m = ceNow - (oldestAtm.getCeOi() != null ? oldestAtm.getCeOi() : 0L);
+            long peOiChange5m = peNow - (oldestAtm.getPeOi() != null ? oldestAtm.getPeOi() : 0L);
+
+            // RELATIVE threshold: a "rapid" build-up is >8% of the strike's own OI in 5m, with a
+            // small absolute floor to ignore noise. (A flat 100k was huge for a thin strike and
+            // tiny for ATM.)
+            double ceThresh = Math.max(25000.0, 0.08 * ceNow);
+            double peThresh = Math.max(25000.0, 0.08 * peNow);
+
+            if (ceOiChange5m > ceThresh) {
                 score -= 15.0;
-                comments.add("Bearish ATM OI Velocity: CE OI growing rapidly (" + ceOiChange5m + " contracts/5m) at " + atmStrike + " strike");
-            } else if (peOiChange5m > 100000) {
+                comments.add("Bearish ATM OI Velocity: CE OI +" + ceOiChange5m + " in 5m (> " + Math.round(ceThresh) + ") at " + atmStrike);
+            } else if (peOiChange5m > peThresh) {
                 score += 15.0;
-                comments.add("Bullish ATM OI Velocity: PE OI growing rapidly (" + peOiChange5m + " contracts/5m) at " + atmStrike + " strike");
+                comments.add("Bullish ATM OI Velocity: PE OI +" + peOiChange5m + " in 5m (> " + Math.round(peThresh) + ") at " + atmStrike);
             } else {
-                comments.add("ATM OI Velocity is stable (CE Change: " + ceOiChange5m + ", PE Change: " + peOiChange5m + " over 5m)");
+                comments.add("ATM OI Velocity stable (CE " + ceOiChange5m + ", PE " + peOiChange5m + " over 5m)");
             }
         } else {
             comments.add("Insufficient historical ATM option snapshots to compute OI Velocity");

@@ -138,4 +138,28 @@ class BacktestingEngineTest {
         verify(tradeSignalRepository, atLeastOnce()).save(any(TradeSignal.class));
         verify(tradeResultRepository, atLeastOnce()).save(any(TradeResult.class));
     }
+
+    @Test
+    void computeMetrics_reportsRiskStats() {
+        // per-trade NET P&L (close order): equity curve 100,50,250,220,200 → peak 250, maxDD 50
+        BacktestingEngine.BacktestMetrics m =
+                BacktestingEngine.computeMetrics(List.of(100.0, -50.0, 200.0, -30.0, -20.0));
+        assertEquals(5, m.trades());
+        assertEquals(2, m.wins());
+        assertEquals(3, m.losses());
+        assertEquals(40.0, m.winRatePct(), 0.01);    // 2/5
+        assertEquals(150.0, m.avgWin(), 0.01);       // 300/2
+        assertEquals(33.33, m.avgLoss(), 0.01);      // 100/3
+        assertEquals(40.0, m.expectancy(), 0.01);    // 200/5
+        assertEquals(3.0, m.profitFactor(), 0.01);   // 300/100
+        assertEquals(50.0, m.maxDrawdown(), 0.01);
+    }
+
+    @Test
+    void computeMetrics_noLosses_profitFactorSentinel() {
+        BacktestingEngine.BacktestMetrics m = BacktestingEngine.computeMetrics(List.of(10.0, 20.0));
+        assertEquals(999.0, m.profitFactor(), 0.01); // no losing trades
+        assertEquals(0.0, m.maxDrawdown(), 0.01);
+        assertEquals(100.0, m.winRatePct(), 0.01);
+    }
 }

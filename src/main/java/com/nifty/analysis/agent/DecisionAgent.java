@@ -79,6 +79,26 @@ public class DecisionAgent {
     @Value("${nifty.risk.max-concurrent-positions:6}")
     private int maxConcurrentPositions;
 
+    // --- P3-1: minimum-confirmation gate (evidence-based, not one collinear factor) ---
+    @Value("${nifty.signal.min-confirmation-enabled:true}")
+    private boolean minConfirmationEnabled;
+    @Value("${nifty.signal.confirm-score:60.0}")
+    private double confirmScore;       // a factor "confirms" when its direction-aware score >= this
+    @Value("${nifty.signal.not-opposing-score:50.0}")
+    private double notOpposingScore;   // a factor is "not opposing" when its score >= this (>= neutral)
+
+    // --- P3-3: direction by consensus of independent signals (not one 1-min tick) ---
+    @Value("${nifty.signal.direction-consensus-enabled:true}")
+    private boolean directionConsensusEnabled;
+    @Value("${nifty.signal.min-direction-agreement:3}")
+    private int minDirectionAgreement; // of 4 votes: technical, multi-timeframe, futures, OI
+
+    // --- P4-1: gate on calibrated probability of winning, not raw confidence points ---
+    @Value("${nifty.calibration.enabled:true}")
+    private boolean calibrationEnabled;
+    @Value("${nifty.calibration.margin:0.0}")
+    private double calibrationMargin; // extra cushion above break-even win-rate (0..1)
+
     // Cached once enough snapshot history exists, to avoid counting a growing table each cycle.
     private volatile boolean historySufficient = false;
 
@@ -93,6 +113,8 @@ public class DecisionAgent {
     private final RiskAgent riskAgent;
 
     private final MarketRegimeAgent marketRegimeAgent;
+    private final MultiTimeframeAgent multiTimeframeAgent;
+    private final com.nifty.analysis.engine.ConfidenceCalibrator calibrator;
     private final MarketSnapshotRepository marketSnapshotRepository;
     private final TradeSignalRepository tradeSignalRepository;
     private final SignalExplanationRepository signalExplanationRepository;
@@ -148,14 +170,29 @@ public class DecisionAgent {
         double spotPrice = latest.getNiftySpot();
         double spotChange = prevSpot != null ? (spotPrice - prevSpot) : 0.0;
 
-        // 2. Determine base trade direction (CE vs PE)
-        AgentResponse technicalBias = technicalAgent.analyze(latest);
-        boolean isBullish = "BULLISH".equals(technicalBias.bias());
-        boolean isBearish = "BEARISH".equals(technicalBias.bias());
-
-        if (!isBullish && !isBearish) {
-            log.info("Market bias is Neutral. Skipping trade evaluation.");
-            return;
+        // 2. Determine base trade direction (CE vs PE).
+        boolean isBullish;
+        boolean isBearish;
+        if (directionConsensusEnabled) {
+            // P3-3: require a CONSENSUS of independent signals, not one 1-minute technical tick.
+            DirectionVote vote = voteDirection(latest, optionChainDtos, spotPrice, spotChange);
+            if (vote.bull() >= minDirectionAgreement && vote.bull() > vote.bear()) {
+                isBullish = true; isBearish = false;
+            } else if (vote.bear() >= minDirectionAgreement && vote.bear() > vote.bull()) {
+                isBullish = false; isBearish = true;
+            } else {
+                log.info("No directional consensus (bull={}, bear={}, need {} of 4). Skipping.",
+                        vote.bull(), vote.bear(), minDirectionAgreement);
+                return;
+            }
+        } else {
+            AgentResponse technicalBias = technicalAgent.analyze(latest);
+            isBullish = "BULLISH".equals(technicalBias.bias());
+            isBearish = "BEARISH".equals(technicalBias.bias());
+            if (!isBullish && !isBearish) {
+                log.info("Market bias is Neutral. Skipping trade evaluation.");
+                return;
+            }
         }
 
         String signalType = isBullish ? "BUY_CE" : "BUY_PE";
@@ -234,6 +271,29 @@ public class DecisionAgent {
         if (finalConfidence < effectiveGate) {
             log.info("Signal confidence ({}%) below threshold ({}%). NO TRADE.", finalConfidence, effectiveGate);
             return;
+        }
+
+        // 5.5 P3-1 minimum-confirmation gate: a high blended score can come from one collinear
+        // trend factor counted ~3x. Require independent evidence — trend/structure AND order
+        // flow (OI build-up or futures basis) AND a non-opposing PCR — before emitting.
+        if (minConfirmationEnabled && !hasMinimumConfirmation(rawResult.factorScores())) {
+            log.info("Insufficient independent confirmation (need trend + flow + non-opposing PCR). NO TRADE.");
+            return;
+        }
+
+        // 5.6 P4-1 calibrated-probability gate: once enough resolved trades exist, require the
+        // MEASURED probability of winning to clear break-even (from the reward:risk) + a margin —
+        // a confidence of "80 points" only trades if history says 80 actually wins often enough.
+        if (calibrationEnabled && calibrator.isTrained()) {
+            double pWin = calibrator.probabilityOfWin(finalConfidence);
+            double required = calibrator.breakEvenWinRate() + calibrationMargin;
+            if (pWin < required) {
+                log.info("Calibrated P(win)={}% below required {}% (break-even+margin). NO TRADE.",
+                        Math.round(pWin * 10000.0) / 100.0, Math.round(required * 10000.0) / 100.0);
+                return;
+            }
+            log.info("Calibrated P(win)={}% clears required {}%.",
+                    Math.round(pWin * 10000.0) / 100.0, Math.round(required * 10000.0) / 100.0);
         }
 
         // 6. Generate the direction-level thesis once and reuse it across the strike ladder
@@ -416,6 +476,62 @@ public class DecisionAgent {
         boolean openWhipsaw = !t.isBefore(java.time.LocalTime.of(9, 15)) && t.isBefore(java.time.LocalTime.of(9, 30));
         boolean lateSessionTheta = !t.isBefore(java.time.LocalTime.of(15, 0)) && t.isBefore(java.time.LocalTime.of(15, 30));
         return openWhipsaw || lateSessionTheta;
+    }
+
+    /** P3-3 vote tally from independent direction signals. */
+    private record DirectionVote(int bull, int bear) {}
+
+    /**
+     * Counts bullish vs bearish votes across four INDEPENDENT signals:
+     * technical bias, multi-timeframe trend, futures basis sign, and OI build-up bias.
+     */
+    private DirectionVote voteDirection(MarketSnapshot latest, List<OptionSnapshotDto> optionChain,
+                                        double spotPrice, double spotChange) {
+        int bull = 0, bear = 0;
+
+        // 1. Technical bias (EMA/RSI/structure)
+        String tech = technicalAgent.analyze(latest).bias();
+        if ("BULLISH".equals(tech)) bull++; else if ("BEARISH".equals(tech)) bear++;
+
+        // 2. Multi-timeframe trend
+        double mtf = multiTimeframeAgent.analyze(latest.getSnapshotTime()).score();
+        if (mtf >= 55.0) bull++; else if (mtf <= 45.0) bear++;
+
+        // 3. Futures basis vs cost-of-carry fair value (P3-4: normalized by days-to-expiry)
+        if (latest.getNiftyFuture() != null) {
+            double premium = latest.getNiftyFuture() - spotPrice;
+            long dte = com.nifty.analysis.util.TimeUtil.daysToWeeklyExpiry(latest.getSnapshotTime().toLocalDate());
+            if (ConfidenceEngine.futuresBasisScore(premium, spotPrice, dte, true) == 100.0) bull++;
+            else if (ConfidenceEngine.futuresBasisScore(premium, spotPrice, dte, false) == 100.0) bear++;
+        }
+
+        // 4. Options OI build-up bias
+        String oi = optionsAgent.analyze(optionChain, spotPrice, spotChange).bias();
+        if ("BULLISH".equals(oi)) bull++; else if ("BEARISH".equals(oi)) bear++;
+
+        log.info("Direction votes -> bull={}, bear={} (technical={}, mtf={}, oi={})", bull, bear, tech, mtf, oi);
+        return new DirectionVote(bull, bear);
+    }
+
+    /**
+     * P3-1: require independent confirmation. Trend/structure (Trend, MultiTimeframe, VWAP are
+     * collinear → treat as ONE group, strongest wins) AND order flow (OI build-up OR futures
+     * basis) AND a non-opposing PCR. Scores are direction-aware (100 favorable / 50 neutral / 0 opposing).
+     */
+    private boolean hasMinimumConfirmation(Map<String, Double> f) {
+        double trend = Math.max(factor(f, "Trend"), Math.max(factor(f, "MultiTimeframe"), factor(f, "VWAP")));
+        boolean trendOk = trend >= confirmScore;
+        boolean flowOk = factor(f, "OI") >= confirmScore || factor(f, "Futures") >= confirmScore;
+        boolean pcrOk = factor(f, "PCR") >= notOpposingScore;
+        if (!(trendOk && flowOk && pcrOk)) {
+            log.info("Confirmation check: trend={} (ok={}), flow[OI={}, Fut={}] (ok={}), PCR={} (ok={})",
+                    trend, trendOk, factor(f, "OI"), factor(f, "Futures"), flowOk, factor(f, "PCR"), pcrOk);
+        }
+        return trendOk && flowOk && pcrOk;
+    }
+
+    private static double factor(Map<String, Double> f, String key) {
+        return f.getOrDefault(key, 0.0);
     }
 
     private static double round2(double value) {

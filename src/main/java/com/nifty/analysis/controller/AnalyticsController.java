@@ -21,6 +21,7 @@ import java.util.Map;
 public class AnalyticsController {
 
     private final BacktestingEngine backtestingEngine;
+    private final com.nifty.analysis.backtest.WalkForwardRunner walkForwardRunner;
     private final TradeResultRepository tradeResultRepository;
     private final com.nifty.analysis.service.AdaptiveWeightsService adaptiveWeightsService;
 
@@ -39,6 +40,17 @@ public class AnalyticsController {
         log.info("Request to run backtest between {} and {}", start, end);
         Map<String, Object> results = backtestingEngine.runBacktest(start, end);
         return ResponseEntity.ok(results);
+    }
+
+    /** Out-of-sample walk-forward: splits the range into folds and reports per-fold + aggregate metrics. */
+    @PostMapping("/walkforward/run")
+    public ResponseEntity<Map<String, Object>> runWalkForward(
+            @RequestParam("start") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime start,
+            @RequestParam("end") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime end,
+            @RequestParam(value = "folds", defaultValue = "4") int folds
+    ) {
+        log.info("Request to run walk-forward backtest between {} and {} over {} folds", start, end, folds);
+        return ResponseEntity.ok(walkForwardRunner.run(start, end, folds));
     }
 
     @GetMapping("/summary")

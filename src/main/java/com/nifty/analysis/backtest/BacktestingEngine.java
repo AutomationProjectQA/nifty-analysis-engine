@@ -101,6 +101,8 @@ public class BacktestingEngine {
         double grossPnl = 0.0;
         double totalCosts = 0.0;
         long totalHoldingSeconds = 0L;
+        // Per-trade NET P&L in close order — feeds the risk metrics (expectancy, profit factor, drawdown).
+        List<Double> tradeNetPnls = new ArrayList<>();
 
         List<ActiveSimulatedTrade> activeTrades = new ArrayList<>();
 
@@ -121,6 +123,7 @@ public class BacktestingEngine {
                     grossPnl += o.grossInr;
                     totalCosts += o.costInr;
                     totalHoldingSeconds += o.holdingSeconds;
+                    tradeNetPnls.add(o.grossInr - o.costInr);
                     stopLossHits++;
                     completed.add(trade);
                 } else if (price >= trade.target2) {
@@ -128,6 +131,7 @@ public class BacktestingEngine {
                     grossPnl += o.grossInr;
                     totalCosts += o.costInr;
                     totalHoldingSeconds += o.holdingSeconds;
+                    tradeNetPnls.add(o.grossInr - o.costInr);
                     target2Hits++;
                     completed.add(trade);
                 } else if (price >= trade.target1 && !trade.hitTarget1) {
@@ -202,6 +206,7 @@ public class BacktestingEngine {
             grossPnl += o.grossInr;
             totalCosts += o.costInr;
             totalHoldingSeconds += o.holdingSeconds;
+            tradeNetPnls.add(o.grossInr - o.costInr);
             expiredCount++;
         }
 
@@ -219,8 +224,17 @@ public class BacktestingEngine {
         results.put("grossPnlInr", round2(grossPnl));
         results.put("totalCostsInr", round2(totalCosts));
         results.put("netPnlInr", round2(netPnl));
-        results.put("winRatePercentage", round2(winRate));
+        results.put("winRatePercentage", round2(winRate)); // target-2 hit rate (kept for back-compat)
         results.put("avgHoldingSeconds", avgHolding);
+
+        // Risk metrics (NET of costs) — the real measure of edge.
+        BacktestMetrics m = computeMetrics(tradeNetPnls);
+        results.put("netWinRatePercentage", m.winRatePct()); // % of trades with positive NET P&L
+        results.put("avgWinInr", m.avgWin());
+        results.put("avgLossInr", m.avgLoss());
+        results.put("expectancyInr", m.expectancy()); // avg NET P&L per trade — must be > 0 to be viable
+        results.put("profitFactor", m.profitFactor()); // gross profit / gross loss; > 1 = profitable
+        results.put("maxDrawdownInr", m.maxDrawdown());
 
         log.info("Backtest complete: Signals={}, Wins={}, SL={}, Expired={}, Net P&L={} INR (gross={}, costs={}), Win Rate={}%",
                 totalSignals, target2Hits, stopLossHits, expiredCount,
@@ -270,6 +284,35 @@ public class BacktestingEngine {
 
     private static double round2(double value) {
         return Math.round(value * 100.0) / 100.0;
+    }
+
+    /** Risk metrics over per-trade NET P&L (close-order). Pure + unit-tested. */
+    public record BacktestMetrics(int trades, int wins, int losses, double winRatePct,
+                                  double avgWin, double avgLoss, double expectancy,
+                                  double profitFactor, double maxDrawdown) {}
+
+    public static BacktestMetrics computeMetrics(List<Double> netPnls) {
+        int trades = netPnls.size();
+        int wins = 0, losses = 0;
+        double grossProfit = 0.0, grossLoss = 0.0;
+        double equity = 0.0, peak = 0.0, maxDd = 0.0;
+        for (double p : netPnls) {
+            if (p > 0) { wins++; grossProfit += p; }
+            else if (p < 0) { losses++; grossLoss += -p; }
+            equity += p;
+            if (equity > peak) peak = equity;
+            double dd = peak - equity;
+            if (dd > maxDd) maxDd = dd;
+        }
+        double net = grossProfit - grossLoss;
+        double winRate = trades > 0 ? 100.0 * wins / trades : 0.0;
+        double avgWin = wins > 0 ? grossProfit / wins : 0.0;
+        double avgLoss = losses > 0 ? grossLoss / losses : 0.0; // positive magnitude
+        double expectancy = trades > 0 ? net / trades : 0.0;
+        // 999 = "no losing trades" sentinel (avoids JSON infinity).
+        double profitFactor = grossLoss > 0 ? grossProfit / grossLoss : (grossProfit > 0 ? 999.0 : 0.0);
+        return new BacktestMetrics(trades, wins, losses, round2(winRate), round2(avgWin),
+                round2(avgLoss), round2(expectancy), round2(profitFactor), round2(maxDd));
     }
 
     private record Outcome(double grossInr, double costInr, long holdingSeconds) {}

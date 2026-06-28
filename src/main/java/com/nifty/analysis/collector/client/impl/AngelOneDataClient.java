@@ -30,7 +30,8 @@ import java.util.concurrent.ConcurrentHashMap;
 @ConditionalOnProperty(name = "nifty.collector.provider", havingValue = "angelone")
 @RequiredArgsConstructor
 @Slf4j
-public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
+public class AngelOneDataClient implements MarketDataClient, OptionChainClient,
+        com.nifty.analysis.util.ExpiryInstrumentSource {
 
     @Value("${nifty.angelone.api-key:}")
     private String apiKey;
@@ -396,11 +397,9 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
                     }
                 }
 
-                // Time to the current weekly expiry (for IV inversion).
-                double years = Math.max(0,
-                        java.time.temporal.ChronoUnit.DAYS.between(
-                                com.nifty.analysis.util.TimeUtil.todayIst(),
-                                findNextThursday(com.nifty.analysis.util.TimeUtil.todayIst()))) / 365.0;
+                // Time to the current weekly expiry (Tuesday) for IV inversion.
+                double years = com.nifty.analysis.util.TimeUtil.daysToWeeklyExpiry(
+                        com.nifty.analysis.util.TimeUtil.todayIst()) / 365.0;
 
                 List<OptionSnapshotDto> snapshots = new ArrayList<>();
                 LocalDateTime now = com.nifty.analysis.util.TimeUtil.nowIst();
@@ -528,13 +527,45 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
             return best;
         }
 
-        // Fallback: compute the conventional last-Thursday monthly symbol.
-        LocalDate lastThursday = findLastThursdayOfMonth(today);
-        if (today.isAfter(lastThursday)) {
-            lastThursday = findLastThursdayOfMonth(today.plusMonths(1));
+        // Fallback: compute the conventional last-expiry-day (Tuesday) monthly symbol.
+        LocalDate lastExpiry = com.nifty.analysis.util.TimeUtil.lastMonthlyExpiry(today);
+        if (today.isAfter(lastExpiry)) {
+            lastExpiry = com.nifty.analysis.util.TimeUtil.lastMonthlyExpiry(today.plusMonths(1));
         }
-        String formatted = lastThursday.format(DateTimeFormatter.ofPattern("ddMMMyy").withLocale(Locale.ENGLISH)).toUpperCase();
+        String formatted = lastExpiry.format(DateTimeFormatter.ofPattern("ddMMMyy").withLocale(Locale.ENGLISH)).toUpperCase();
         return "NIFTY" + formatted + "FUT";
+    }
+
+    /**
+     * Layer 1 expiry source: the nearest NIFTY contract expiry on/after {@code from}, read from the
+     * loaded scrip master. Empty until the master is downloaded (callers then fall back to the
+     * weekday calendar). The exchange bakes holiday shifts into these dates, so they're authoritative.
+     */
+    @Override
+    public java.util.Optional<LocalDate> nearestWeeklyExpiry(LocalDate from) {
+        if (!scripMasterLoaded) {
+            return java.util.Optional.empty();
+        }
+        java.util.List<String> expiries = new ArrayList<>();
+        for (ScripInfo info : scripMap.values()) {
+            if (info.expiry() != null && !info.expiry().isBlank()) {
+                expiries.add(info.expiry());
+            }
+        }
+        return nearestExpiryFrom(expiries, from, this::parseScripExpiry);
+    }
+
+    /** Pure: smallest parseable expiry >= from. Extracted for unit testing. */
+    static java.util.Optional<LocalDate> nearestExpiryFrom(java.util.Collection<String> expiryStrings,
+            LocalDate from, java.util.function.Function<String, LocalDate> parser) {
+        LocalDate best = null;
+        for (String s : expiryStrings) {
+            LocalDate exp = parser.apply(s);
+            if (exp != null && !exp.isBefore(from) && (best == null || exp.isBefore(best))) {
+                best = exp;
+            }
+        }
+        return java.util.Optional.ofNullable(best);
     }
 
     /** Parses an Angel One scrip-master expiry string (e.g. "26JUN2026") to a date; null if unparseable. */
@@ -544,8 +575,13 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
         }
         for (String pattern : new String[]{"ddMMMyyyy", "ddMMMyy", "dd-MMM-yyyy"}) {
             try {
-                return LocalDate.parse(expiry.toUpperCase(),
-                        DateTimeFormatter.ofPattern(pattern, Locale.ENGLISH));
+                // Case-INSENSITIVE: Angel sends uppercase months ("26JUN2026") but the locale's
+                // short month is "Jun" — a case-sensitive parse would fail and silently disable Layer 1.
+                DateTimeFormatter f = new java.time.format.DateTimeFormatterBuilder()
+                        .parseCaseInsensitive()
+                        .appendPattern(pattern)
+                        .toFormatter(Locale.ENGLISH);
+                return LocalDate.parse(expiry.trim(), f);
             } catch (Exception ignored) {
                 // try next pattern
             }
@@ -555,27 +591,13 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient {
 
     private String findCurrentOptionExpiryDateSymbolStr() {
         LocalDate today = com.nifty.analysis.util.TimeUtil.todayIst();
-        LocalDate nextThursday = findNextThursday(today);
-        if (today.getDayOfWeek() == java.time.DayOfWeek.THURSDAY && com.nifty.analysis.util.TimeUtil.nowIst().getHour() >= 16) {
-            nextThursday = findNextThursday(today.plusDays(1));
+        LocalDate expiry = com.nifty.analysis.util.TimeUtil.nextWeeklyExpiry(today);
+        // On expiry day after market close, roll to the following week's expiry.
+        if (today.getDayOfWeek() == com.nifty.analysis.util.TimeUtil.expiryDay()
+                && com.nifty.analysis.util.TimeUtil.nowIst().getHour() >= 16) {
+            expiry = com.nifty.analysis.util.TimeUtil.nextWeeklyExpiry(today.plusDays(1));
         }
-        return nextThursday.format(DateTimeFormatter.ofPattern("ddMMMyy").withLocale(Locale.ENGLISH)).toUpperCase();
-    }
-
-    private LocalDate findLastThursdayOfMonth(LocalDate date) {
-        LocalDate lastDay = date.withDayOfMonth(date.lengthOfMonth());
-        while (lastDay.getDayOfWeek() != java.time.DayOfWeek.THURSDAY) {
-            lastDay = lastDay.minusDays(1);
-        }
-        return lastDay;
-    }
-
-    private LocalDate findNextThursday(LocalDate date) {
-        LocalDate current = date;
-        while (current.getDayOfWeek() != java.time.DayOfWeek.THURSDAY) {
-            current = current.plusDays(1);
-        }
-        return current;
+        return expiry.format(DateTimeFormatter.ofPattern("ddMMMyy").withLocale(Locale.ENGLISH)).toUpperCase();
     }
 
 

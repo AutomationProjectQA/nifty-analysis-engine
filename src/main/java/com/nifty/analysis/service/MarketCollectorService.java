@@ -68,15 +68,14 @@ public class MarketCollectorService {
             // 1. Fetch & Store Market Snapshot
             MarketSnapshotDto marketData = marketDataClient.fetchMarketData();
 
-            // Query previous snapshot to retrieve last calculated EMA values
+            // Previous snapshot (still used below for the prev-spot delta passed to the decision agent).
             Optional<MarketSnapshot> prevSnapshot = marketSnapshotRepository.findLatest();
-            Double prevEma20 = prevSnapshot.map(MarketSnapshot::getEma20).orElse(null);
-            Double prevEma50 = prevSnapshot.map(MarketSnapshot::getEma50).orElse(null);
 
-            // Calculate technical indicators
-            double ema20 = technicalIndicatorService.calculateEma(marketData.niftySpot(), prevEma20, 20);
-            double ema50 = technicalIndicatorService.calculateEma(marketData.niftySpot(), prevEma50, 50);
-            double rsi = technicalIndicatorService.calculateRsi(marketData.niftySpot(), marketData.timestamp());
+            // Calculate technical indicators on the 5m CANDLE series (real period EMAs/RSI),
+            // not on 1-minute ticks (which made "EMA20" a noisy 20-minute EMA and RSI a 14-minute RSI).
+            double ema20 = technicalIndicatorService.calculateEmaFromCandles("5m", 20, marketData.timestamp(), marketData.niftySpot());
+            double ema50 = technicalIndicatorService.calculateEmaFromCandles("5m", 50, marketData.timestamp(), marketData.niftySpot());
+            double rsi = technicalIndicatorService.calculateRsiFromCandles("5m", 14, marketData.timestamp(), marketData.niftySpot());
             double vwap = technicalIndicatorService.calculateVwap(marketData.niftySpot(), marketData.volume(),
                     marketData.timestamp());
 
@@ -195,15 +194,12 @@ public class MarketCollectorService {
                 timeframe, candle.getTimestamp(), candle.getOpen(), candle.getClose(), candle.getVolume());
     }
 
-    /** True once today (IST) is past the weekly expiry (Thursday on/after) of the signal's date. */
+    /** True once today (IST) is past the weekly expiry (Tuesday on/after) of the signal's date. */
     private boolean isPastExpiry(LocalDateTime signalTime) {
         if (signalTime == null) {
             return false;
         }
-        java.time.LocalDate expiry = signalTime.toLocalDate();
-        while (expiry.getDayOfWeek() != java.time.DayOfWeek.THURSDAY) {
-            expiry = expiry.plusDays(1);
-        }
+        java.time.LocalDate expiry = com.nifty.analysis.util.TimeUtil.nextWeeklyExpiry(signalTime.toLocalDate());
         return com.nifty.analysis.util.TimeUtil.todayIst().isAfter(expiry);
     }
 

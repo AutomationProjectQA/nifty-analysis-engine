@@ -52,6 +52,8 @@ class DecisionAgentTest {
     @Mock private EntryTimingAgent entryTimingAgent;
     @Mock private RiskAgent riskAgent;
     @Mock private MarketRegimeAgent marketRegimeAgent;
+    @Mock private MultiTimeframeAgent multiTimeframeAgent;
+    @Mock private com.nifty.analysis.engine.ConfidenceCalibrator calibrator;
     @Mock private MarketSnapshotRepository marketSnapshotRepository;
     @Mock private TradeSignalRepository tradeSignalRepository;
     @Mock private SignalExplanationRepository signalExplanationRepository;
@@ -136,6 +138,11 @@ class DecisionAgentTest {
     private void stubAgentConfidence(double agentConfidence) {
         when(confidenceEngine.calculateRawConfidence(eq(latest), anyList(), anyDouble(), eq(true)))
                 .thenReturn(new ConfidenceEngine.RawConfidenceResult(agentConfidence, Map.of("Trend", agentConfidence)));
+    }
+
+    private void stubConfidenceWithFactors(double agentConfidence, Map<String, Double> factors) {
+        when(confidenceEngine.calculateRawConfidence(eq(latest), anyList(), anyDouble(), eq(true)))
+                .thenReturn(new ConfidenceEngine.RawConfidenceResult(agentConfidence, factors));
     }
 
     private void stubCritic(double adjustedConfidence) {
@@ -330,5 +337,125 @@ class DecisionAgentTest {
         ArgumentCaptor<Double> rawConfidence = ArgumentCaptor.forClass(Double.class);
         verify(criticAgent).evaluateAndApplyPenalties(rawConfidence.capture(), eq(latest), anyList(), eq(true));
         assertEquals(60.0, rawConfidence.getValue(), 0.001);
+    }
+
+    // --- P3-1: minimum-confirmation gate ---
+
+    @Test
+    void minConfirmation_blocksWhenOnlyTrendConfirms() {
+        // High blended score driven by trend alone (OI/Futures/PCR absent → 0) must NOT trade.
+        stubUpToConfidence();
+        when(onnxModelService.isModelLoaded()).thenReturn(true);
+        when(marketSnapshotRepository.count()).thenReturn(100L);
+        stubConfidenceWithFactors(80.0, Map.of("Trend", 100.0, "MultiTimeframe", 100.0, "VWAP", 100.0));
+        stubCritic(80.0); // clears the confidence gate
+        ReflectionTestUtils.setField(decisionAgent, "minConfirmationEnabled", true);
+        ReflectionTestUtils.setField(decisionAgent, "confirmScore", 60.0);
+        ReflectionTestUtils.setField(decisionAgent, "notOpposingScore", 50.0);
+
+        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
+
+        verify(tradeSignalRepository, never()).save(any()); // blocked: no order flow, no PCR
+    }
+
+    @Test
+    void minConfirmation_passesWithTrendFlowAndNonOpposingPcr() {
+        stubUpToConfidence();
+        when(onnxModelService.isModelLoaded()).thenReturn(true);
+        when(marketSnapshotRepository.count()).thenReturn(100L);
+        stubConfidenceWithFactors(80.0, Map.of("Trend", 100.0, "OI", 100.0, "PCR", 100.0));
+        stubCritic(80.0);
+        ReflectionTestUtils.setField(decisionAgent, "minConfirmationEnabled", true);
+        ReflectionTestUtils.setField(decisionAgent, "confirmScore", 60.0);
+        ReflectionTestUtils.setField(decisionAgent, "notOpposingScore", 50.0);
+        when(llmService.generateTradeExplanation(anyString(), anyInt(), anyDouble(), anyMap(), anyString()))
+                .thenReturn("thesis");
+
+        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
+
+        verify(tradeSignalRepository, atLeastOnce()).save(any());
+        verify(orderExecutionService).executeOrder("BUY_CE", 23500, 23500.0, 1);
+    }
+
+    // --- P3-3: direction by consensus ---
+
+    @Test
+    void directionConsensus_skipsWhenNoMajority() {
+        // Only technical is bullish (1 of 4) → below the 3-vote requirement → skip.
+        when(optionSnapshotRepository.findLatestSnapshotTime()).thenReturn(now);
+        when(optionSnapshotRepository.findBySnapshotTime(now)).thenReturn(atmChain());
+        when(marketRegimeAgent.analyze(now)).thenReturn(new AgentResponse(85.0, "TRENDING_BULLISH", List.of()));
+        when(technicalAgent.analyze(latest)).thenReturn(new AgentResponse(80.0, "BULLISH", List.of()));
+        when(multiTimeframeAgent.analyze(now)).thenReturn(new AgentResponse(50.0, "NEUTRAL", List.of()));
+        when(optionsAgent.analyze(anyList(), anyDouble(), anyDouble()))
+                .thenReturn(new AgentResponse(50.0, "NEUTRAL", List.of()));
+        latest.setNiftyFuture(23505.0); // premium +5 → no futures vote
+        ReflectionTestUtils.setField(decisionAgent, "directionConsensusEnabled", true);
+        ReflectionTestUtils.setField(decisionAgent, "minDirectionAgreement", 3);
+
+        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
+
+        verify(tradeSignalRepository, never()).save(any());
+    }
+
+    // --- P4-1: calibrated-probability gate ---
+
+    @Test
+    void calibration_blocksWhenProbabilityBelowBreakEven() {
+        stubUpToConfidence();
+        when(onnxModelService.isModelLoaded()).thenReturn(true);
+        when(marketSnapshotRepository.count()).thenReturn(100L);
+        stubAgentConfidence(80.0);
+        stubCritic(80.0); // clears the confidence gate
+        ReflectionTestUtils.setField(decisionAgent, "calibrationEnabled", true);
+        ReflectionTestUtils.setField(decisionAgent, "calibrationMargin", 0.0);
+        when(calibrator.isTrained()).thenReturn(true);
+        when(calibrator.breakEvenWinRate()).thenReturn(0.55);
+        when(calibrator.probabilityOfWin(80.0)).thenReturn(0.40); // < 0.55 → block
+
+        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
+
+        verify(tradeSignalRepository, never()).save(any());
+    }
+
+    @Test
+    void calibration_allowsWhenProbabilityClearsBreakEven() {
+        stubUpToConfidence();
+        when(onnxModelService.isModelLoaded()).thenReturn(true);
+        when(marketSnapshotRepository.count()).thenReturn(100L);
+        stubAgentConfidence(80.0);
+        stubCritic(80.0);
+        ReflectionTestUtils.setField(decisionAgent, "calibrationEnabled", true);
+        when(calibrator.isTrained()).thenReturn(true);
+        when(calibrator.breakEvenWinRate()).thenReturn(0.55);
+        when(calibrator.probabilityOfWin(80.0)).thenReturn(0.70); // clears
+        when(llmService.generateTradeExplanation(anyString(), anyInt(), anyDouble(), anyMap(), anyString()))
+                .thenReturn("thesis");
+
+        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
+
+        verify(orderExecutionService).executeOrder("BUY_CE", 23500, 23500.0, 1);
+    }
+
+    @Test
+    void directionConsensus_buysCeOnBullishMajority() {
+        // technical + mtf + futures(+30) + OI all bullish → 4 votes → trade.
+        stubUpToConfidence();
+        when(multiTimeframeAgent.analyze(now)).thenReturn(new AgentResponse(90.0, "BULLISH", List.of()));
+        when(optionsAgent.analyze(anyList(), anyDouble(), anyDouble()))
+                .thenReturn(new AgentResponse(85.0, "BULLISH", List.of()));
+        latest.setNiftyFuture(23530.0); // premium +30 → bullish futures vote
+        ReflectionTestUtils.setField(decisionAgent, "directionConsensusEnabled", true);
+        ReflectionTestUtils.setField(decisionAgent, "minDirectionAgreement", 3);
+        when(onnxModelService.isModelLoaded()).thenReturn(true);
+        when(marketSnapshotRepository.count()).thenReturn(100L);
+        stubAgentConfidence(80.0);
+        stubCritic(80.0);
+        when(llmService.generateTradeExplanation(anyString(), anyInt(), anyDouble(), anyMap(), anyString()))
+                .thenReturn("thesis");
+
+        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
+
+        verify(orderExecutionService).executeOrder("BUY_CE", 23500, 23500.0, 1);
     }
 }

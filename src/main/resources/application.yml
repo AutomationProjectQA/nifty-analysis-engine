@@ -78,17 +78,46 @@ nifty:
     momentum-confirmation-enabled: true
     # Skip CE entries that are chasing an over-extended move above VWAP.
     entry-timing-enabled: true
+    # P3-1: require INDEPENDENT confirmation before a signal — trend/structure AND order flow
+    # (OI build-up or futures basis) AND a non-opposing PCR — not just a high blended score.
+    min-confirmation-enabled: true
+    confirm-score: 60.0        # a factor "confirms" when its direction-aware score >= this
+    not-opposing-score: 50.0   # a factor is "not opposing" when its score >= this (>= neutral)
+    # P3-3: decide direction by CONSENSUS of 4 independent signals (technical, multi-timeframe,
+    # futures basis, OI bias), not one 1-minute technical tick.
+    direction-consensus-enabled: true
+    min-direction-agreement: 3 # of 4 votes must agree
 
   # Avoid the volatile first 15 min after open and the theta-heavy final 30 min.
   # Only carves out those intraday windows (does not affect 24/7 simulation runs).
   timing:
     session-filter-enabled: true
 
+  # Expiry calendar (3 layers): live broker scrip master (authoritative) → holiday-aware weekday
+  # → this config. The day is an escape hatch if SEBI/NSE changes the rule again (was Thursday,
+  # now Tuesday for NSE NIFTY). Holidays only matter for the offline weekday fallback/backtests.
+  expiry:
+    day: TUESDAY
+    holidays-resource: nse-holidays.txt
+
+  # P4-1: calibrate confidence points into a measured P(win) and gate on break-even + margin.
+  calibration:
+    enabled: true
+    min-samples: 30        # need this many resolved trades before the calibrated gate activates
+    margin: 0.0            # extra win-rate cushion above break-even (0..1); raise to be stricter
+
   # Online learning: nudge confidence factor weights from resolved-trade outcomes.
   confidence:
     adaptive-enabled: true
     # Gentle online-learning rate (was 0.5 — lowered to reduce weight skew from noise).
     learning-rate: 0.25
+    # P3-2: Trend, MultiTimeframe and VWAP are collinear (all measure trend). When true, they are
+    # collapsed into ONE group so trend is counted once, not ~3x (which inflated every score).
+    decollinearize-trend: true
+    # P4-2: batched weight tuning. Per-trade online updates chase noise → OFF; the weekly batch
+    # (AdaptiveWeightsService) tunes only over >= min-batch-trades with a held-out validation check.
+    online-per-trade-enabled: false
+    min-batch-trades: 30
 
   # Outbound HTTP timeouts (Angel One, Gemini, Yahoo) — a hung API can't block threads.
   http:
@@ -124,6 +153,11 @@ nifty:
     # Profit target as a percent of the entry premium (the "take 2% profit" goal).
     target-profit-percent: 2.0
     # Stop-loss as a percent of the entry premium.
+    # IDEAL: keep the stop close to the target so one loss doesn't wipe many wins.
+    #   - target 2% + stop ~2-3%   => R:R ~1:1, break-even win-rate ~55-60% (recommended)
+    #   - target 2% + stop ~1.3%   => R:R ~1.5:1, break-even ~40% (aggressive but ideal R:R)
+    #   - current 40% stop => R:R ~1:20, needs ~96% win-rate just to break even (NOT viable)
+    # Change this value any time; no code change needed.
     stop-loss-percent: 40.0
 
     # Refuse to open new trades when the live broker feed has degraded to SIMULATED

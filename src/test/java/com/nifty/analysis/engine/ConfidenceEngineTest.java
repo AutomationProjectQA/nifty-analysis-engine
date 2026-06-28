@@ -19,8 +19,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -58,8 +60,8 @@ class ConfidenceEngineTest {
 
     @Test
     void testCalculateRawConfidence_UsesOverallPcr() {
-        // Arrange
-        LocalDateTime now = LocalDateTime.now();
+        // Arrange — pin to a Tuesday (Nifty weekly expiry) so DTE=0 and the futures basis is deterministic.
+        LocalDateTime now = LocalDateTime.of(2026, 6, 23, 11, 0);
         MarketSnapshot latest = new MarketSnapshot();
         latest.setSnapshotTime(now);
         latest.setNiftySpot(23500.0);
@@ -87,17 +89,52 @@ class ConfidenceEngineTest {
 
         // Assert
         // Let's trace expected factor scores for BEARISH:
-        // Trend = 100 - 50.0 = 50.0 (weight 20)
-        // OI = 100 - 50.0 = 50.0 (weight 20)
-        // PCR = 0.6 <= 0.7 -> 100.0 (weight 15)
-        // VWAP = Spot (23500) < VWAP (23500) -> 0.0 (weight 15) (unless we adjust the logic to <=)
-        // RSI = 50.0 -> > 40 and <= 55 -> 50.0 (weight 10)
-        // Futures = Premium (30.0) -> < 35.0 -> 50.0 (weight 10)
-        // Sentiment = 100 - 50.0 = 50.0 (weight 10)
-        // Total Weighted Sum = 50*20 + 50*20 + 100*15 + 0*15 + 50*10 + 50*10 + 50*10 = 1000 + 1000 + 1500 + 0 + 500 + 500 + 500 = 5000
-        // Expected Raw Confidence = 5000 / 100 = 50.0%
-        assertEquals(50.0, result.rawConfidence());
+        // Fallback weights (DB empty): Trend15, MTF15, OI15, PCR15, VWAP15, RSI10, Futures7, Sentiment8.
+        // BEARISH factor scores:
+        // Trend=50, MTF=50, OI=50, PCR(0.6<=0.7)=100, VWAP(23500<23500=false)=0, RSI(50)=50, Sentiment=50.
+        // Futures (P3-4): premium=30 vs fair basis at DTE=0 (~2.1, band 8) → not a discount → 0.
+        // Sum = 50*15+50*15+50*15+100*15+0*15+50*10+0*7+50*8 = 4650 → /100 = 46.5%.
+        assertEquals(46.5, result.rawConfidence(), 0.01);
         assertEquals(100.0, result.factorScores().get("PCR"));
         verify(optionsIndicatorService, times(1)).calculateOverallPcr(chain);
+    }
+
+    @Test
+    void blendConfidence_decollinearizesTrendGroup() {
+        // Equal weights (sum 100); only the three collinear trend factors fire.
+        Map<String, Double> weights = Map.of(
+                "Trend", 15.0, "MultiTimeframe", 15.0, "VWAP", 15.0, "OI", 15.0,
+                "PCR", 15.0, "RSI", 10.0, "Futures", 7.0, "Sentiment", 8.0);
+        Map<String, Double> scores = Map.of(
+                "Trend", 100.0, "MultiTimeframe", 100.0, "VWAP", 100.0, "OI", 0.0,
+                "PCR", 0.0, "RSI", 0.0, "Futures", 0.0, "Sentiment", 0.0);
+
+        // Naive: trend counted 3x → 45% of the score from one signal.
+        assertEquals(45.0, ConfidenceEngine.blendConfidence(scores, weights, false), 0.01);
+        // De-collinearized: trend counted ONCE (weight 45/3=15 over total 70) → ~21.43%.
+        assertEquals(21.43, ConfidenceEngine.blendConfidence(scores, weights, true), 0.01);
+    }
+
+    @Test
+    void futuresBasisScore_normalizesByDaysToExpiry() {
+        double spot = 23500.0;
+        // Near expiry (DTE=1): fair ~4.2 → a +30 basis is clearly rich → bullish.
+        assertEquals(100.0, ConfidenceEngine.futuresBasisScore(30.0, spot, 1, true), 0.01);
+        // Far from expiry (DTE=6): fair ~25, band ~12.5 → the SAME +30 is only neutral.
+        assertEquals(50.0, ConfidenceEngine.futuresBasisScore(30.0, spot, 6, true), 0.01);
+        // A clear discount is bearish at any DTE.
+        assertEquals(100.0, ConfidenceEngine.futuresBasisScore(-40.0, spot, 3, false), 0.01);
+    }
+
+    @Test
+    void blendConfidence_allFactorsAgree_is100_eitherWay() {
+        Map<String, Double> weights = Map.of(
+                "Trend", 15.0, "MultiTimeframe", 15.0, "VWAP", 15.0, "OI", 15.0,
+                "PCR", 15.0, "RSI", 10.0, "Futures", 7.0, "Sentiment", 8.0);
+        Map<String, Double> scores = Map.of(
+                "Trend", 100.0, "MultiTimeframe", 100.0, "VWAP", 100.0, "OI", 100.0,
+                "PCR", 100.0, "RSI", 100.0, "Futures", 100.0, "Sentiment", 100.0);
+        assertEquals(100.0, ConfidenceEngine.blendConfidence(scores, weights, false), 0.01);
+        assertEquals(100.0, ConfidenceEngine.blendConfidence(scores, weights, true), 0.01);
     }
 }

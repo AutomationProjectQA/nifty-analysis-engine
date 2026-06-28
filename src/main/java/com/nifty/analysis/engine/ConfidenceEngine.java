@@ -13,16 +13,26 @@ import com.nifty.analysis.repository.ConfidenceWeightRepository;
 import com.nifty.analysis.service.OptionsIndicatorService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class ConfidenceEngine {
+
+    /** P3-2: Trend, MultiTimeframe and VWAP all measure the same trend → collapse to one group. */
+    private static final Set<String> TREND_GROUP = Set.of("Trend", "MultiTimeframe", "VWAP");
+
+    private static final double RISK_FREE_RATE = 0.065; // ~6.5% India risk-free, for fair futures basis
+
+    @Value("${nifty.confidence.decollinearize-trend:true}")
+    private boolean decollinearizeTrend;
 
     private final ConfidenceWeightRepository confidenceWeightRepository;
 
@@ -99,13 +109,11 @@ public class ConfidenceEngine {
 
         double oiScore = isCall ? optionsAgentResponse.score() : 100.0 - optionsAgentResponse.score(); // OI build-up score
 
+        // P3-4: score the futures basis vs. its cost-of-carry FAIR value (which grows with days to
+        // expiry), not against fixed absolute points — a +30 basis means rich at 1 DTE, cheap at 7 DTE.
         double futurePremium = latest.getNiftyFuture() - latest.getNiftySpot();
-        double futuresScore;
-        if (isCall) {
-            futuresScore = futurePremium > 35.0 ? 100.0 : (futurePremium > 15.0 ? 50.0 : 0.0);
-        } else {
-            futuresScore = futurePremium < 15.0 ? 100.0 : (futurePremium < 35.0 ? 50.0 : 0.0);
-        }
+        long dte = com.nifty.analysis.util.TimeUtil.daysToWeeklyExpiry(latest.getSnapshotTime().toLocalDate());
+        double futuresScore = futuresBasisScore(futurePremium, latest.getNiftySpot(), dte, isCall);
 
         double sentimentScore = isCall ? sentimentAgent.analyze().score() : 100.0 - sentimentAgent.analyze().score();
 
@@ -113,7 +121,6 @@ public class ConfidenceEngine {
         double mtScore = isCall ? mtScoreVal : 100.0 - mtScoreVal;
 
         // 3. Compute weighted confidence
-        double weightedSum = 0.0;
         Map<String, Double> factorScores = new HashMap<>();
 
         factorScores.put("Trend", trendScore);
@@ -125,17 +132,70 @@ public class ConfidenceEngine {
         factorScores.put("Futures", futuresScore);
         factorScores.put("Sentiment", sentimentScore);
 
-        for (Map.Entry<String, Double> entry : factorScores.entrySet()) {
-            double weight = weightMap.getOrDefault(entry.getKey(), 0.0);
-            weightedSum += entry.getValue() * weight;
-            log.debug("Factor score details: Factor={}, Score={}, Weight={}", entry.getKey(), entry.getValue(), weight);
-        }
-
-        double rawConfidence = weightedSum / totalWeight;
-        rawConfidence = Math.round(rawConfidence * 100.0) / 100.0;
+        double rawConfidence = blendConfidence(factorScores, weightMap, decollinearizeTrend);
 
         log.info("Raw weighted confidence score calculated: {}% (Direction: {})", rawConfidence, isCall ? "BULLISH" : "BEARISH");
         return new RawConfidenceResult(rawConfidence, factorScores);
+    }
+
+    /**
+     * Weighted blend of direction-aware factor scores. When {@code decollinearizeTrend} is true,
+     * the collinear trend factors (Trend, MultiTimeframe, VWAP) are collapsed into ONE group that
+     * contributes a single factor's worth (the average of their weights) on their weighted-average
+     * score — so trend is counted once, not three times. Pure + unit-tested.
+     */
+    /**
+     * P3-4: direction-aware score for the futures basis, normalized by days-to-expiry.
+     * Fair basis = spot · r · (DTE/365) (cost of carry). A premium meaningfully ABOVE fair is
+     * bullish carry; a discount (below fair) is bearish. The "meaningful" band scales with fair
+     * value (min 8 pts) so it isn't fooled by a large absolute basis far from expiry.
+     * Pure + unit-tested.
+     */
+    public static double futuresBasisScore(double premium, double spot, double daysToExpiry, boolean isCall) {
+        double fair = spot * RISK_FREE_RATE * Math.max(daysToExpiry, 0.5) / 365.0;
+        double band = Math.max(8.0, fair * 0.5);
+        if (isCall) {
+            if (premium >= fair + band) return 100.0; // clearly rich → bullish
+            if (premium >= fair - band) return 50.0;  // around fair → neutral
+            return 0.0;                               // discount → bearish
+        } else {
+            if (premium <= fair - band) return 100.0; // clearly cheap/discount → bearish
+            if (premium <= fair + band) return 50.0;
+            return 0.0;
+        }
+    }
+
+    static double blendConfidence(Map<String, Double> scores, Map<String, Double> weights, boolean decollinearizeTrend) {
+        double sum = 0.0, totalWeight = 0.0;
+
+        if (decollinearizeTrend) {
+            double groupWeightSum = 0.0, groupScoreWeighted = 0.0;
+            for (String k : TREND_GROUP) {
+                double w = weights.getOrDefault(k, 0.0);
+                groupWeightSum += w;
+                groupScoreWeighted += scores.getOrDefault(k, 50.0) * w;
+            }
+            if (groupWeightSum > 0.0) {
+                double groupScore = groupScoreWeighted / groupWeightSum;     // weighted-avg trend
+                double groupWeight = groupWeightSum / TREND_GROUP.size();    // counted ONCE
+                sum += groupScore * groupWeight;
+                totalWeight += groupWeight;
+            }
+        }
+
+        for (Map.Entry<String, Double> e : scores.entrySet()) {
+            if (decollinearizeTrend && TREND_GROUP.contains(e.getKey())) {
+                continue; // already folded into the trend group above
+            }
+            double w = weights.getOrDefault(e.getKey(), 0.0);
+            sum += e.getValue() * w;
+            totalWeight += w;
+        }
+
+        if (totalWeight == 0.0) {
+            return 50.0;
+        }
+        return Math.round((sum / totalWeight) * 100.0) / 100.0;
     }
 
     public record RawConfidenceResult(

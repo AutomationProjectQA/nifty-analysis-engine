@@ -1,0 +1,19 @@
+# NSE trading holidays — one ISO date (yyyy-MM-dd) per line. Lines starting with # are comments.
+#
+# Used ONLY by the Layer-2 weekday fallback in TimeUtil: when a computed expiry day lands on a
+# holiday, expiry moves EARLIER to the previous trading day. The live path (Layer 1) reads real
+# contract dates from the broker scrip master and does NOT need this list.
+#
+# IMPORTANT: this is a STARTER list of fixed-date national holidays only. Replace/extend it with
+# NSE's OFFICIAL holiday circular each year — the variable-date festival holidays (Mahashivratri,
+# Holi, Ram Navami, Mahavir Jayanti, Bakri Id, Ganesh Chaturthi, Dussehra, Diwali/Muhurat,
+# Guru Nanak Jayanti, etc.) change yearly and are NOT all listed here.
+
+# --- 2026 (fixed-date / computed; verify against NSE) ---
+2026-01-26   # Republic Day (Mon)
+2026-04-03   # Good Friday (Fri)
+2026-04-14   # Dr. Ambedkar Jayanti (Tue) — falls on an expiry weekday
+2026-05-01   # Maharashtra Day (Fri)
+2026-08-15   # Independence Day (Sat)
+2026-10-02   # Gandhi Jayanti (Fri)
+2026-12-25   # Christmas (Fri)

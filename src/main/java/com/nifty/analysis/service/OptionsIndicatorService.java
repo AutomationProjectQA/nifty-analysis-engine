@@ -24,7 +24,7 @@ public class OptionsIndicatorService {
         }
 
         if (totalCallOi == 0) {
-            return 0.0;
+            return 1.0; // no data → NEUTRAL (1.0), not 0.0 (which downstream reads as strongly bearish)
         }
 
         double pcr = (double) totalPutOi / totalCallOi;
@@ -45,7 +45,7 @@ public class OptionsIndicatorService {
         }
 
         if (totalCallVol == 0) {
-            return 0.0;
+            return 1.0; // no data → NEUTRAL (1.0), not 0.0 (which downstream reads as strongly bearish)
         }
 
         double volPcr = (double) totalPutVol / totalCallVol;

@@ -38,6 +38,11 @@ public class ConfidenceWeightTuner {
     @Value("${nifty.confidence.adaptive-enabled:true}")
     private boolean adaptiveEnabled;
 
+    // P4-2: per-trade online updates chase single-trade noise. OFF by default — the BATCHED,
+    // held-out-validated AdaptiveWeightsService is the canonical tuner. Flip on only for experiments.
+    @Value("${nifty.confidence.online-per-trade-enabled:false}")
+    private boolean onlinePerTradeEnabled;
+
     @Value("${nifty.confidence.learning-rate:0.5}")
     private double learningRate;
 
@@ -65,8 +70,8 @@ public class ConfidenceWeightTuner {
      */
     @Transactional
     public void reinforce(TradeSignal signal, boolean win) {
-        if (!adaptiveEnabled) {
-            return;
+        if (!adaptiveEnabled || !onlinePerTradeEnabled) {
+            return; // batched AdaptiveWeightsService owns tuning now (P4-2)
         }
         ensureSeeded();
 

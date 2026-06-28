@@ -1,6 +1,8 @@
 package com.nifty.analysis.service;
 
+import com.nifty.analysis.entity.MarketCandle;
 import com.nifty.analysis.entity.MarketSnapshot;
+import com.nifty.analysis.repository.MarketCandleRepository;
 import com.nifty.analysis.repository.MarketSnapshotRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,12 +28,46 @@ class TechnicalIndicatorServiceTest {
 
     @Mock
     private MarketSnapshotRepository marketSnapshotRepository;
+    @Mock
+    private MarketCandleRepository marketCandleRepository;
 
     private TechnicalIndicatorService technicalIndicatorService;
 
     @BeforeEach
     void setUp() {
-        technicalIndicatorService = new TechnicalIndicatorService(marketSnapshotRepository);
+        technicalIndicatorService = new TechnicalIndicatorService(marketSnapshotRepository, marketCandleRepository);
+    }
+
+    private static MarketCandle candle(double close) {
+        MarketCandle c = new MarketCandle();
+        c.setClose(close);
+        return c;
+    }
+
+    @Test
+    void testEmaFromCandles() {
+        // findHistoryBefore returns newest-first; reversed → [100,102,104,106], + live 108.
+        when(marketCandleRepository.findHistoryBefore(any(String.class), any(LocalDateTime.class), any(PageRequest.class)))
+                .thenReturn(List.of(candle(106), candle(104), candle(102), candle(100)));
+        double ema = technicalIndicatorService.calculateEmaFromCandles("5m", 3, LocalDateTime.now(), 108.0);
+        // SMA(100,102,104)=102; α=0.5; →106*.5+102*.5=104; →108*.5+104*.5=106
+        assertEquals(106.0, ema, 0.01);
+    }
+
+    @Test
+    void testRsiFromCandles_allGains_is100() {
+        when(marketCandleRepository.findHistoryBefore(any(String.class), any(LocalDateTime.class), any(PageRequest.class)))
+                .thenReturn(List.of(candle(104), candle(103), candle(102), candle(101), candle(100)));
+        double rsi = technicalIndicatorService.calculateRsiFromCandles("5m", 3, LocalDateTime.now(), 105.0);
+        assertEquals(100.0, rsi, 0.01); // strictly rising → no losses → RSI 100
+    }
+
+    @Test
+    void testRsiFromCandles_insufficientData_isNeutral() {
+        when(marketCandleRepository.findHistoryBefore(any(String.class), any(LocalDateTime.class), any(PageRequest.class)))
+                .thenReturn(List.of()); // only the live price → not enough
+        double rsi = technicalIndicatorService.calculateRsiFromCandles("5m", 14, LocalDateTime.now(), 105.0);
+        assertEquals(50.0, rsi, 0.01);
     }
 
     @Test
@@ -87,25 +123,25 @@ class TechnicalIndicatorServiceTest {
         // Arrange
         LocalDateTime evaluationTime = LocalDateTime.now().toLocalDate().atTime(10, 0);
 
+        // Volumes are CUMULATIVE daily totals; the service differences them into per-period volume.
         MarketSnapshot s1 = new MarketSnapshot();
         s1.setNiftySpot(23500.0);
-        s1.setVolume(100.0);
+        s1.setVolume(100.0);   // cumulative -> period 100
         s1.setSnapshotTime(evaluationTime.minusMinutes(5));
 
         MarketSnapshot s2 = new MarketSnapshot();
         s2.setNiftySpot(23510.0);
-        s2.setVolume(200.0);
+        s2.setVolume(300.0);   // cumulative -> period 200
         s2.setSnapshotTime(evaluationTime.minusMinutes(2));
 
         when(marketSnapshotRepository.findBetween(any(LocalDateTime.class), any(LocalDateTime.class)))
                 .thenReturn(List.of(s1, s2));
 
-        // Act
-        double vwap = technicalIndicatorService.calculateVwap(23520.0, 300.0, evaluationTime);
+        // Act — current cumulative volume 600 -> period 300
+        double vwap = technicalIndicatorService.calculateVwap(23520.0, 600.0, evaluationTime);
 
-        // Assert
-        // Total Volume = 100 + 200 + 300 = 600
-        // Total Spot*Volume = (23500 * 100) + (23510 * 200) + (23520 * 300) = 2350000 + 4702000 + 7056000 = 14108000
+        // Assert — per-period volumes 100/200/300 (total 600)
+        // Total Spot*Volume = (23500*100) + (23510*200) + (23520*300) = 14108000
         // VWAP = 14108000 / 600 = 23513.33
         assertEquals(23513.33, vwap, 0.01);
     }
