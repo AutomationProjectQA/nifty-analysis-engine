@@ -168,7 +168,7 @@ class MarketCollectorServiceTest {
         verify(redisService, times(1)).saveLatestOptionChain(savedOptions);
         
         // Verify decision agent signal checks trigger at end of collection
-        verify(decisionAgent, times(1)).evaluateMarketForSignals(any(MarketSnapshot.class), any());
+        verify(decisionAgent, times(1)).evaluateMarketForSignals(any(MarketSnapshot.class), any(), anyString());
     }
 
     @Test
@@ -193,7 +193,7 @@ class MarketCollectorServiceTest {
 
         marketCollectorService.collect();
 
-        verify(decisionAgent, times(1)).evaluateMarketForSignals(any(MarketSnapshot.class), any());
+        verify(decisionAgent, times(1)).evaluateMarketForSignals(any(MarketSnapshot.class), any(), anyString());
     }
 
     @Test

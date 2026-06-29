@@ -92,6 +92,9 @@ nifty:
     # abstain on thin data, making 3-of-4 unreachable. Tune up with the /decision-funnel baseline.
     direction-consensus-enabled: true
     min-direction-agreement: 2 # of 4 votes must agree (>=2 and strictly beating the other side)
+    # Phase-2 DB-P16-3: reject if the latest option chain is older than this vs the market tick
+    # (don't trade against a frozen option feed). 0 disables.
+    max-option-staleness-seconds: 300
 
   # Phase-1 AG-F4: continuous, config-driven liquidity scoring (was a binary OI>=50k gate with a
   # fake spread pass). Score ramps with OI; unknown OI is allowed with a neutral score, not rejected.

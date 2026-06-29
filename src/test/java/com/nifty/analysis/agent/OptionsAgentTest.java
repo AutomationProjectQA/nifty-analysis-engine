@@ -68,4 +68,24 @@ class OptionsAgentTest {
         assertTrue(response.comments().stream().anyMatch(c -> c.contains("Volume PCR is bullish")));
         assertTrue(response.comments().stream().anyMatch(c -> c.contains("Bullish ATM OI Velocity")));
     }
+
+    @Test
+    void testAnalyze_callWritingOnDownMove_isBearishBuildUp() {
+        // Phase-2 AG-F8: heavy CE OI build-up on a down move = call writing = BEARISH (was mislabeled).
+        // Neutral PCR (1.0) and neutral volume PCR so the build-up term drives the bias.
+        LocalDateTime now = LocalDateTime.now();
+        OptionSnapshotDto atm = new OptionSnapshotDto(
+                23200, 100000L, 100000L, /*ceOiChange*/ 50000L, /*peOiChange*/ 0L,
+                15.0, 1.0, 23200.0, /*ceVol*/ 10000L, /*peVol*/ 10000L, now, null, null);
+        List<OptionSnapshotDto> chain = List.of(atm);
+
+        when(optionSnapshotRepository.findByStrikePriceAndSnapshotTimeAfterOrderBySnapshotTimeDesc(anyInt(), any(LocalDateTime.class)))
+                .thenReturn(Collections.emptyList()); // no velocity component
+
+        AgentResponse response = optionsAgent.analyze(chain, 23200.0, /*spotChange*/ -10.0);
+
+        assertEquals("BEARISH", response.bias());
+        assertTrue(response.comments().stream().anyMatch(c -> c.contains("Bearish OI build-up")),
+                "expected a bearish build-up comment, got " + response.comments());
+    }
 }

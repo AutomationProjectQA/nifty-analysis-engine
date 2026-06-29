@@ -4,18 +4,12 @@ import com.nifty.analysis.dto.AgentResponse;
 import com.nifty.analysis.engine.ConfidenceEngine;
 import com.nifty.analysis.entity.MarketSnapshot;
 import com.nifty.analysis.entity.OptionSnapshot;
-import com.nifty.analysis.entity.SignalExplanation;
-import com.nifty.analysis.entity.TradeSignal;
-import com.nifty.analysis.notification.TelegramBotService;
 import com.nifty.analysis.repository.MarketSnapshotRepository;
 import com.nifty.analysis.repository.OptionSnapshotRepository;
-import com.nifty.analysis.repository.SignalExplanationRepository;
-import com.nifty.analysis.repository.TradeSignalRepository;
 import com.nifty.analysis.service.LlmService;
 import com.nifty.analysis.service.OnnxModelService;
-import com.nifty.analysis.service.OptionPricingService;
-import com.nifty.analysis.service.OrderExecutionService;
 import com.nifty.analysis.service.RiskGuardService;
+import com.nifty.analysis.service.SignalEmissionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -23,12 +17,12 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.verification.VerificationMode;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -36,8 +30,9 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Covers the decision-gating logic: the early-return gates, the ONNX/agent
- * confidence blend, the cold-start fallback, and the gating threshold.
+ * Covers the decision-GATING logic: the early-return gates, the ONNX/agent confidence blend, the
+ * cold-start fallback, and the gating threshold. Signal EMISSION is delegated to (and verified
+ * against) {@link SignalEmissionService}; its internals are tested in SignalEmissionServiceTest.
  */
 @ExtendWith(MockitoExtension.class)
 class DecisionAgentTest {
@@ -48,26 +43,19 @@ class DecisionAgentTest {
     @Mock private OptionsAgent optionsAgent;
     @Mock private SentimentAgent sentimentAgent;
     @Mock private MarketAgent marketAgent;
-    @Mock private LiquidityAgent liquidityAgent;
     @Mock private EntryTimingAgent entryTimingAgent;
-    @Mock private RiskAgent riskAgent;
     @Mock private MarketRegimeAgent marketRegimeAgent;
     @Mock private MultiTimeframeAgent multiTimeframeAgent;
     @Mock private com.nifty.analysis.engine.ConfidenceCalibrator calibrator;
     @Mock private com.nifty.analysis.instrument.InstrumentRegistry instrumentRegistry;
     @Mock private com.nifty.analysis.strategy.RegimeStrategySelector strategySelector;
-    @Mock private com.nifty.analysis.repository.TradeLegRepository tradeLegRepository;
     @Mock private MarketSnapshotRepository marketSnapshotRepository;
-    @Mock private TradeSignalRepository tradeSignalRepository;
-    @Mock private SignalExplanationRepository signalExplanationRepository;
     @Mock private OptionSnapshotRepository optionSnapshotRepository;
     @Mock private com.nifty.analysis.repository.DecisionTraceRepository decisionTraceRepository;
-    @Mock private TelegramBotService telegramBotService;
     @Mock private LlmService llmService;
-    @Mock private OrderExecutionService orderExecutionService;
     @Mock private OnnxModelService onnxModelService;
     @Mock private RiskGuardService riskGuardService;
-    @Mock private OptionPricingService optionPricingService;
+    @Mock private SignalEmissionService signalEmissionService;
 
     @InjectMocks
     private DecisionAgent decisionAgent;
@@ -80,42 +68,22 @@ class DecisionAgentTest {
         ReflectionTestUtils.setField(decisionAgent, "gatingThreshold", 60.0);
         ReflectionTestUtils.setField(decisionAgent, "modelWeight", 0.4);
         ReflectionTestUtils.setField(decisionAgent, "modelMinHistory", 50L);
-        ReflectionTestUtils.setField(decisionAgent, "targetProfitPercent", 2.0);
-        ReflectionTestUtils.setField(decisionAgent, "stopLossPercent", 40.0);
-        // Signal-generation tuning fields: keep single-strike + extra gates deterministic.
-        ReflectionTestUtils.setField(decisionAgent, "strikeLadderEnabled", false);
-        ReflectionTestUtils.setField(decisionAgent, "strikeStep", 50);
         ReflectionTestUtils.setField(decisionAgent, "sidewaysExtraGate", 8.0);
-        ReflectionTestUtils.setField(decisionAgent, "minLiquidityScore", 70.0);
         ReflectionTestUtils.setField(decisionAgent, "calibrationMaxRequiredWinRate", 0.65);
         ReflectionTestUtils.setField(decisionAgent, "momentumOppositionPenalty", 12.0);
         ReflectionTestUtils.setField(decisionAgent, "momentumConfirmationEnabled", false);
         ReflectionTestUtils.setField(decisionAgent, "entryTimingEnabled", false);
         ReflectionTestUtils.setField(decisionAgent, "sessionFilterEnabled", false);
-        ReflectionTestUtils.setField(decisionAgent, "maxConcurrentPositions", 6);
+        ReflectionTestUtils.setField(decisionAgent, "maxOptionStalenessSeconds", 0L); // disable freshness gate in tests
 
-        // Instrument registry: resolve NIFTY spec (step 50, lot 65) for every evaluation.
         lenient().when(instrumentRegistry.get("NIFTY"))
                 .thenReturn(new com.nifty.analysis.instrument.InstrumentSpec("NIFTY", 50, 65, true));
-        // Strategy selector → single-leg long by default (spreads disabled), so these tests use the ladder.
         lenient().when(strategySelector.select(anyString(), anyBoolean()))
                 .thenReturn(com.nifty.analysis.strategy.StrategyType.LONG_CALL);
-
-        // Risk guard allows trading by default; one test overrides this.
         lenient().when(riskGuardService.canOpenNewTrade(anyString()))
                 .thenReturn(RiskGuardService.RiskCheck.allow());
-        // Pricing stubs used only by the signal-generating tests.
-        lenient().when(optionPricingService.getOptionLtp(anyString(), anyInt())).thenReturn(150.0);
-        lenient().when(orderExecutionService.calculateQuantity(anyDouble(), anyInt(), anyInt())).thenReturn(65);
-        // Default: order is "skipped" (paper/simulated) so the signal is tracked normally.
-        lenient().when(orderExecutionService.executeOrder(anyString(), anyInt(), anyDouble(), anyInt()))
-                .thenReturn(OrderExecutionService.OrderResult.skipped());
-        // Strikes are liquid by default; the per-strike liquidity gate passes.
-        lenient().when(liquidityAgent.evaluateStrike(any(), anyBoolean()))
-                .thenReturn(new AgentResponse(100.0, "BULLISH", List.of()));
-        // Risk advisory stub (advisory only — does not block signals).
-        lenient().when(riskAgent.evaluateRisk(anyDouble(), anyDouble(), anyDouble(), anyDouble()))
-                .thenReturn(new AgentResponse(30.0, "NEUTRAL", List.of("Unfavorable Risk/Reward ratio (1:0.03).")));
+        // Emission delegated to the service — default: one signal emitted. Block tests verify it's NOT called.
+        stubEmitReturns(false, 1, 1);
 
         latest = new MarketSnapshot();
         latest.setSnapshotTime(now);
@@ -124,7 +92,23 @@ class DecisionAgentTest {
         latest.setIndiaVix(12.0);
     }
 
-    /** A single-strike (ATM 23500) option chain so the per-strike liquidity lookup resolves. */
+    // ---- helpers ----
+
+    /** Stubs SignalEmissionService.emit(...) to return the given result. */
+    private void stubEmitReturns(boolean multiLeg, int emitted, int candidates) {
+        lenient().when(signalEmissionService.emit(any(), any(), anyInt(), anyBoolean(), anyString(), anyDouble(),
+                        anyDouble(), anyDouble(), anyDouble(), anyDouble(), anyBoolean(), anyDouble(),
+                        any(), any(), anyList(), any(), anyDouble()))
+                .thenReturn(new SignalEmissionService.EmissionResult(multiLeg, emitted, candidates));
+    }
+
+    /** Verifies whether emit(...) was invoked with the given verification mode. */
+    private void verifyEmit(VerificationMode mode) {
+        verify(signalEmissionService, mode).emit(any(), any(), anyInt(), anyBoolean(), anyString(), anyDouble(),
+                anyDouble(), anyDouble(), anyDouble(), anyDouble(), anyBoolean(), anyDouble(),
+                any(), any(), anyList(), any(), anyDouble());
+    }
+
     private List<OptionSnapshot> atmChain() {
         OptionSnapshot o = new OptionSnapshot();
         o.setStrikePrice(23500);
@@ -139,9 +123,6 @@ class DecisionAgentTest {
         when(optionSnapshotRepository.findByInstrumentAndSnapshotTime("NIFTY", now)).thenReturn(atmChain());
         when(marketRegimeAgent.analyze("NIFTY", now)).thenReturn(new AgentResponse(85.0, "TRENDING_BULLISH", List.of()));
         when(technicalAgent.analyze(latest)).thenReturn(new AgentResponse(80.0, "BULLISH", List.of()));
-        // Reached only when a signal is actually emitted (per-strike duplicate guard).
-        lenient().when(tradeSignalRepository.findFirstByInstrumentAndStrikeAndSignalTypeAndStatus("NIFTY", 23500, "BUY_CE", "ACTIVE"))
-                .thenReturn(Optional.empty());
         when(technicalAgent.getFeatures(latest))
                 .thenReturn(new TechnicalAgent.TechnicalFeatures(50, 1.0, 1.0, 12, 0.0, 0.01, 0.0, 1.0));
         when(onnxModelService.predictBullishProbability(anyDouble(), anyDouble(), anyDouble(), anyDouble(),
@@ -163,14 +144,15 @@ class DecisionAgentTest {
                 .thenReturn(new CriticAgent.CriticResult(adjustedConfidence, List.of()));
     }
 
+    // ---- gate tests ----
+
     @Test
     void noOptionData_skipsEvaluation() {
         when(optionSnapshotRepository.findLatestSnapshotTimeByInstrument("NIFTY")).thenReturn(null);
 
         decisionAgent.evaluateMarketForSignals(latest, 23490.0);
 
-        verify(tradeSignalRepository, never()).save(any());
-        verify(orderExecutionService, never()).executeOrder(anyString(), anyInt(), anyDouble());
+        verifyEmit(never());
     }
 
     @Test
@@ -180,19 +162,17 @@ class DecisionAgentTest {
 
         decisionAgent.evaluateMarketForSignals(latest, 23490.0);
 
-        // Blocked before any market data is even fetched
-        verify(optionSnapshotRepository, never()).findLatestSnapshotTime();
-        verify(tradeSignalRepository, never()).save(any());
-        verify(orderExecutionService, never()).executeOrder(anyString(), anyInt(), anyDouble());
+        verify(optionSnapshotRepository, never()).findLatestSnapshotTimeByInstrument(anyString());
+        verifyEmit(never());
 
         // Phase-0 observability: the rejection is recorded as a decision trace at the risk_guard gate.
-        org.mockito.ArgumentCaptor<com.nifty.analysis.entity.DecisionTrace> traceCaptor =
-                org.mockito.ArgumentCaptor.forClass(com.nifty.analysis.entity.DecisionTrace.class);
+        ArgumentCaptor<com.nifty.analysis.entity.DecisionTrace> traceCaptor =
+                ArgumentCaptor.forClass(com.nifty.analysis.entity.DecisionTrace.class);
         verify(decisionTraceRepository).save(traceCaptor.capture());
         com.nifty.analysis.entity.DecisionTrace t = traceCaptor.getValue();
-        org.junit.jupiter.api.Assertions.assertEquals("REJECTED", t.getOutcome());
-        org.junit.jupiter.api.Assertions.assertEquals("risk_guard", t.getRejectStage());
-        org.junit.jupiter.api.Assertions.assertTrue(t.getRejectReason().contains("Max trades per day"));
+        assertEquals("REJECTED", t.getOutcome());
+        assertEquals("risk_guard", t.getRejectStage());
+        assertTrue(t.getRejectReason().contains("Max trades per day"));
     }
 
     @Test
@@ -207,10 +187,8 @@ class DecisionAgentTest {
 
         decisionAgent.evaluateMarketForSignals(latest, 23490.0);
 
-        // Evaluation is no longer skipped (direction was computed)...
-        verify(technicalAgent).analyze(latest);
-        // ...but the stricter sideways gate blocks the trade.
-        verify(tradeSignalRepository, never()).save(any());
+        verify(technicalAgent).analyze(latest); // direction WAS computed (not skipped)
+        verifyEmit(never());                     // but the stricter sideways gate blocked emission
     }
 
     @Test
@@ -222,8 +200,7 @@ class DecisionAgentTest {
 
         decisionAgent.evaluateMarketForSignals(latest, 23490.0);
 
-        verify(tradeSignalRepository, never()).save(any());
-        verify(orderExecutionService, never()).executeOrder(anyString(), anyInt(), anyDouble());
+        verifyEmit(never());
     }
 
     @Test
@@ -236,48 +213,12 @@ class DecisionAgentTest {
 
         decisionAgent.evaluateMarketForSignals(latest, 23490.0);
 
-        verify(tradeSignalRepository, never()).save(any());
-        verify(orderExecutionService, never()).executeOrder(anyString(), anyInt(), anyDouble());
+        verifyEmit(never());
         verify(llmService, never()).generateTradeExplanation(anyString(), anyInt(), anyDouble(), anyMap(), anyString());
     }
 
     @Test
-    void maxConcurrentPositionsReached_noSignalGenerated() {
-        // Aggregate exposure cap: at/over the max open positions, no new trade opens.
-        stubUpToConfidence();
-        when(onnxModelService.isModelLoaded()).thenReturn(true);
-        when(marketSnapshotRepository.count()).thenReturn(100L);
-        stubAgentConfidence(80.0);
-        stubCritic(80.0); // clears the gate
-        when(tradeSignalRepository.countByStatus("ACTIVE")).thenReturn(6L); // == cap
-
-        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
-
-        verify(tradeSignalRepository, never()).save(any());
-        verify(orderExecutionService, never()).executeOrder(anyString(), anyInt(), anyDouble(), anyInt());
-    }
-
-    @Test
-    void orderFailed_noPhantomSignalCreated() {
-        // A FAILED live order must not leave a phantom ACTIVE signal behind.
-        stubUpToConfidence();
-        when(onnxModelService.isModelLoaded()).thenReturn(true);
-        when(marketSnapshotRepository.count()).thenReturn(100L);
-        stubAgentConfidence(80.0);
-        stubCritic(80.0);
-        when(llmService.generateTradeExplanation(anyString(), anyInt(), anyDouble(), anyMap(), anyString()))
-                .thenReturn("thesis");
-        when(orderExecutionService.executeOrder(anyString(), anyInt(), anyDouble(), anyInt()))
-                .thenReturn(OrderExecutionService.OrderResult.failed());
-
-        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
-
-        verify(tradeSignalRepository, never()).save(any());
-        verify(signalExplanationRepository, never()).saveAll(any());
-    }
-
-    @Test
-    void modelReady_blendsModelAndAgentConfidence_andGeneratesSignal() {
+    void modelReady_blendsModelAndAgentConfidence_andEmits() {
         stubUpToConfidence();
         when(onnxModelService.isModelLoaded()).thenReturn(true);
         when(marketSnapshotRepository.count()).thenReturn(100L);
@@ -292,55 +233,7 @@ class DecisionAgentTest {
         ArgumentCaptor<Double> rawConfidence = ArgumentCaptor.forClass(Double.class);
         verify(criticAgent).evaluateAndApplyPenalties(rawConfidence.capture(), eq(latest), anyList(), eq(true));
         assertEquals(68.0, rawConfidence.getValue(), 0.001);
-
-        verify(tradeSignalRepository, atLeastOnce()).save(any());
-        verify(orderExecutionService).executeOrder("BUY_CE", 23500, 23500.0, 1);
-    }
-
-    @Test
-    void generatedSignal_usesRealLtpQuantityAndPercentLevels() {
-        stubUpToConfidence();
-        when(onnxModelService.isModelLoaded()).thenReturn(true);
-        when(marketSnapshotRepository.count()).thenReturn(100L);
-        stubAgentConfidence(60.0);
-        stubCritic(68.0);
-        when(llmService.generateTradeExplanation(anyString(), anyInt(), anyDouble(), anyMap(), anyString()))
-                .thenReturn("thesis");
-
-        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
-
-        ArgumentCaptor<TradeSignal> saved = ArgumentCaptor.forClass(TradeSignal.class);
-        verify(tradeSignalRepository, atLeastOnce()).save(saved.capture());
-        TradeSignal signal = saved.getValue();
-        assertEquals(150.0, signal.getEntry(), 0.001);        // real LTP (stubbed)
-        assertEquals(65, signal.getQuantity());               // quantity (stubbed)
-        assertEquals(153.0, signal.getTarget2(), 0.001);      // +2% target
-        assertEquals(90.0, signal.getStopLoss(), 0.001);      // -40% stop
-    }
-
-    @Test
-    void generatedSignal_persistsDecisionProvenance() {
-        stubUpToConfidence();
-        when(onnxModelService.isModelLoaded()).thenReturn(true);
-        when(marketSnapshotRepository.count()).thenReturn(100L);
-        stubAgentConfidence(60.0);
-        stubCritic(68.0);
-        when(llmService.generateTradeExplanation(anyString(), anyInt(), anyDouble(), anyMap(), anyString()))
-                .thenReturn("thesis");
-
-        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
-
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<SignalExplanation>> captor = ArgumentCaptor.forClass(List.class);
-        verify(signalExplanationRepository).saveAll(captor.capture());
-        List<SignalExplanation> saved = captor.getValue();
-
-        assertTrue(saved.stream().anyMatch(e -> "Model_ONNX".equals(e.getFactor()) && e.getScore() == 80.0));
-        assertTrue(saved.stream().anyMatch(e -> "Agent_Weighted".equals(e.getFactor()) && e.getScore() == 60.0));
-        assertTrue(saved.stream().anyMatch(e -> "Blended_Raw".equals(e.getFactor()) && e.getScore() == 68.0));
-        assertTrue(saved.stream().anyMatch(e -> "Final_Confidence".equals(e.getFactor())));
-        // every provenance row must be linked to the signal
-        assertTrue(saved.stream().allMatch(e -> e.getSignal() != null));
+        verifyEmit(times(1));
     }
 
     @Test
@@ -361,46 +254,23 @@ class DecisionAgentTest {
         assertEquals(60.0, rawConfidence.getValue(), 0.001);
     }
 
-    // --- P5-1: multi-leg defined-risk strategy ---
-
-    @Test
-    void multiLegStrategy_emitsIronCondorWithLegs() {
-        stubUpToConfidence();
-        when(onnxModelService.isModelLoaded()).thenReturn(true);
-        when(marketSnapshotRepository.count()).thenReturn(100L);
-        stubAgentConfidence(80.0);
-        stubCritic(80.0);
-        // Selector routes to a multi-leg defined-risk strategy → the ladder is replaced.
-        when(strategySelector.select(anyString(), anyBoolean()))
-                .thenReturn(com.nifty.analysis.strategy.StrategyType.IRON_CONDOR);
-        when(llmService.generateTradeExplanation(anyString(), anyInt(), anyDouble(), anyMap(), anyString()))
-                .thenReturn("thesis");
-
-        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
-
-        ArgumentCaptor<TradeSignal> saved = ArgumentCaptor.forClass(TradeSignal.class);
-        verify(tradeSignalRepository, atLeastOnce()).save(saved.capture());
-        assertEquals("IRON_CONDOR", saved.getValue().getStrategy());
-        verify(tradeLegRepository).saveAll(any()); // the 4 condor legs persisted
-    }
-
     // --- P3-1: minimum-confirmation gate ---
 
     @Test
     void minConfirmation_blocksWhenOnlyTrendConfirms() {
-        // High blended score driven by trend alone (OI/Futures/PCR absent → 0) must NOT trade.
+        // High blended score driven by trend alone (OI/Futures/PCR absent → neutral 50, not confirming) → no trade.
         stubUpToConfidence();
         when(onnxModelService.isModelLoaded()).thenReturn(true);
         when(marketSnapshotRepository.count()).thenReturn(100L);
         stubConfidenceWithFactors(80.0, Map.of("Trend", 100.0, "MultiTimeframe", 100.0, "VWAP", 100.0));
-        stubCritic(80.0); // clears the confidence gate
+        stubCritic(80.0);
         ReflectionTestUtils.setField(decisionAgent, "minConfirmationEnabled", true);
         ReflectionTestUtils.setField(decisionAgent, "confirmScore", 60.0);
         ReflectionTestUtils.setField(decisionAgent, "notOpposingScore", 50.0);
 
         decisionAgent.evaluateMarketForSignals(latest, 23490.0);
 
-        verify(tradeSignalRepository, never()).save(any()); // blocked: no order flow, no PCR
+        verifyEmit(never()); // blocked: no order flow confirmation
     }
 
     @Test
@@ -418,8 +288,7 @@ class DecisionAgentTest {
 
         decisionAgent.evaluateMarketForSignals(latest, 23490.0);
 
-        verify(tradeSignalRepository, atLeastOnce()).save(any());
-        verify(orderExecutionService).executeOrder("BUY_CE", 23500, 23500.0, 1);
+        verifyEmit(times(1));
     }
 
     // --- P3-3: direction by consensus ---
@@ -440,46 +309,7 @@ class DecisionAgentTest {
 
         decisionAgent.evaluateMarketForSignals(latest, 23490.0);
 
-        verify(tradeSignalRepository, never()).save(any());
-    }
-
-    // --- P4-1: calibrated-probability gate ---
-
-    @Test
-    void calibration_blocksWhenProbabilityBelowBreakEven() {
-        stubUpToConfidence();
-        when(onnxModelService.isModelLoaded()).thenReturn(true);
-        when(marketSnapshotRepository.count()).thenReturn(100L);
-        stubAgentConfidence(80.0);
-        stubCritic(80.0); // clears the confidence gate
-        ReflectionTestUtils.setField(decisionAgent, "calibrationEnabled", true);
-        ReflectionTestUtils.setField(decisionAgent, "calibrationMargin", 0.0);
-        when(calibrator.isTrained()).thenReturn(true);
-        when(calibrator.breakEvenWinRate()).thenReturn(0.55);
-        when(calibrator.probabilityOfWin(80.0)).thenReturn(0.40); // < 0.55 → block
-
-        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
-
-        verify(tradeSignalRepository, never()).save(any());
-    }
-
-    @Test
-    void calibration_allowsWhenProbabilityClearsBreakEven() {
-        stubUpToConfidence();
-        when(onnxModelService.isModelLoaded()).thenReturn(true);
-        when(marketSnapshotRepository.count()).thenReturn(100L);
-        stubAgentConfidence(80.0);
-        stubCritic(80.0);
-        ReflectionTestUtils.setField(decisionAgent, "calibrationEnabled", true);
-        when(calibrator.isTrained()).thenReturn(true);
-        when(calibrator.breakEvenWinRate()).thenReturn(0.55);
-        when(calibrator.probabilityOfWin(80.0)).thenReturn(0.70); // clears
-        when(llmService.generateTradeExplanation(anyString(), anyInt(), anyDouble(), anyMap(), anyString()))
-                .thenReturn("thesis");
-
-        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
-
-        verify(orderExecutionService).executeOrder("BUY_CE", 23500, 23500.0, 1);
+        verifyEmit(never());
     }
 
     @Test
@@ -501,6 +331,66 @@ class DecisionAgentTest {
 
         decisionAgent.evaluateMarketForSignals(latest, 23490.0);
 
-        verify(orderExecutionService).executeOrder("BUY_CE", 23500, 23500.0, 1);
+        verifyEmit(times(1));
+    }
+
+    // --- P4-1: calibrated-probability gate ---
+
+    @Test
+    void calibration_blocksWhenProbabilityBelowBreakEven() {
+        stubUpToConfidence();
+        when(onnxModelService.isModelLoaded()).thenReturn(true);
+        when(marketSnapshotRepository.count()).thenReturn(100L);
+        stubAgentConfidence(80.0);
+        stubCritic(80.0);
+        ReflectionTestUtils.setField(decisionAgent, "calibrationEnabled", true);
+        ReflectionTestUtils.setField(decisionAgent, "calibrationMargin", 0.0);
+        when(calibrator.isTrained()).thenReturn(true);
+        when(calibrator.breakEvenWinRate()).thenReturn(0.55);
+        when(calibrator.probabilityOfWin(80.0)).thenReturn(0.40); // < 0.55 → block
+
+        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
+
+        verifyEmit(never());
+    }
+
+    @Test
+    void calibration_allowsWhenProbabilityClearsBreakEven() {
+        stubUpToConfidence();
+        when(onnxModelService.isModelLoaded()).thenReturn(true);
+        when(marketSnapshotRepository.count()).thenReturn(100L);
+        stubAgentConfidence(80.0);
+        stubCritic(80.0);
+        ReflectionTestUtils.setField(decisionAgent, "calibrationEnabled", true);
+        when(calibrator.isTrained()).thenReturn(true);
+        when(calibrator.breakEvenWinRate()).thenReturn(0.55);
+        when(calibrator.probabilityOfWin(80.0)).thenReturn(0.70); // clears
+        when(llmService.generateTradeExplanation(anyString(), anyInt(), anyDouble(), anyMap(), anyString()))
+                .thenReturn("thesis");
+
+        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
+
+        verifyEmit(times(1));
+    }
+
+    @Test
+    void perStrikeFiltersBlockAll_tracedAsRejected() {
+        // Gates pass but emission returns 0 (every strike filtered) → trace REJECTED at per_strike_filters.
+        stubUpToConfidence();
+        when(onnxModelService.isModelLoaded()).thenReturn(true);
+        when(marketSnapshotRepository.count()).thenReturn(100L);
+        stubAgentConfidence(80.0);
+        stubCritic(80.0);
+        when(llmService.generateTradeExplanation(anyString(), anyInt(), anyDouble(), anyMap(), anyString()))
+                .thenReturn("thesis");
+        stubEmitReturns(false, 0, 3); // emission filtered every candidate strike
+
+        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
+
+        ArgumentCaptor<com.nifty.analysis.entity.DecisionTrace> cap =
+                ArgumentCaptor.forClass(com.nifty.analysis.entity.DecisionTrace.class);
+        verify(decisionTraceRepository).save(cap.capture());
+        assertEquals("REJECTED", cap.getValue().getOutcome());
+        assertEquals("per_strike_filters", cap.getValue().getRejectStage());
     }
 }

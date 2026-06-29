@@ -47,24 +47,9 @@ public class DecisionAgent {
     @Value("${nifty.model-min-history:50}")
     private long modelMinHistory;
 
-    @Value("${nifty.risk.target-profit-percent:2.0}")
-    private double targetProfitPercent;
-
-    @Value("${nifty.risk.stop-loss-percent:40.0}")
-    private double stopLossPercent;
-
     // --- Signal generation tuning (more trades + higher accuracy) ---
-    @Value("${nifty.signal.strike-ladder-enabled:true}")
-    private boolean strikeLadderEnabled;
-
-    @Value("${nifty.signal.strike-step:50}")
-    private int strikeStep;
-
     @Value("${nifty.signal.sideways-extra-gate:8.0}")
     private double sidewaysExtraGate;
-
-    @Value("${nifty.signal.min-liquidity-score:70.0}")
-    private double minLiquidityScore;
 
     @Value("${nifty.signal.momentum-confirmation-enabled:true}")
     private boolean momentumConfirmationEnabled;
@@ -74,6 +59,11 @@ public class DecisionAgent {
 
     @Value("${nifty.timing.session-filter-enabled:true}")
     private boolean sessionFilterEnabled;
+
+    // Phase-2 DB-P16-3: reject when the latest option chain is older than this vs the market tick —
+    // never size/emit a trade against stale OI/IV/LTP. 0 disables the check.
+    @Value("${nifty.signal.max-option-staleness-seconds:300}")
+    private long maxOptionStalenessSeconds;
 
     // Soften (don't skip) the volatile open/close window: raise the confidence gate by this many
     // points instead of blocking outright, so a strong open-driven move can still trade.
@@ -90,10 +80,6 @@ public class DecisionAgent {
     @Value("${nifty.signal.momentum-opposition-penalty:12.0}")
     private double momentumOppositionPenalty;
 
-    // Aggregate exposure cap: max simultaneously-open (ACTIVE) positions across all ladders.
-    @Value("${nifty.risk.max-concurrent-positions:6}")
-    private int maxConcurrentPositions;
-
     // --- P3-1: minimum-confirmation gate (evidence-based, not one collinear factor) ---
     @Value("${nifty.signal.min-confirmation-enabled:true}")
     private boolean minConfirmationEnabled;
@@ -107,12 +93,6 @@ public class DecisionAgent {
     private boolean directionConsensusEnabled;
     @Value("${nifty.signal.min-direction-agreement:2}")
     private int minDirectionAgreement; // of 4 votes: technical, multi-timeframe, futures, OI
-
-    // --- P5-1: defined-risk multi-leg strategy params ---
-    @Value("${nifty.strategy.spread-width-steps:2}")
-    private int spreadWidthSteps;                 // spread/wing width = this many strike steps
-    @Value("${nifty.strategy.target-fraction:0.6}")
-    private double multiLegTargetFraction;        // exit a multi-leg at this fraction of max profit
 
     // --- P4-1: gate on calibrated probability of winning, not raw confidence points ---
     @Value("${nifty.calibration.enabled:true}")
@@ -135,27 +115,21 @@ public class DecisionAgent {
     private final OptionsAgent optionsAgent;
     private final SentimentAgent sentimentAgent;
     private final MarketAgent marketAgent;
-    private final LiquidityAgent liquidityAgent;
     private final EntryTimingAgent entryTimingAgent;
-    private final RiskAgent riskAgent;
 
     private final MarketRegimeAgent marketRegimeAgent;
     private final MultiTimeframeAgent multiTimeframeAgent;
     private final com.nifty.analysis.engine.ConfidenceCalibrator calibrator;
     private final com.nifty.analysis.instrument.InstrumentRegistry instrumentRegistry;
     private final com.nifty.analysis.strategy.RegimeStrategySelector strategySelector;
-    private final com.nifty.analysis.repository.TradeLegRepository tradeLegRepository;
     private final MarketSnapshotRepository marketSnapshotRepository;
-    private final TradeSignalRepository tradeSignalRepository;
-    private final SignalExplanationRepository signalExplanationRepository;
     private final OptionSnapshotRepository optionSnapshotRepository;
     private final com.nifty.analysis.repository.DecisionTraceRepository decisionTraceRepository;
-    private final TelegramBotService telegramBotService;
     private final LlmService llmService;
-    private final OrderExecutionService orderExecutionService;
     private final OnnxModelService onnxModelService;
     private final RiskGuardService riskGuardService;
-    private final OptionPricingService optionPricingService;
+    // Phase-3: emission (build/price/execute/persist/notify) is delegated to this service.
+    private final com.nifty.analysis.service.SignalEmissionService signalEmissionService;
 
     /** Phase-0 observability accumulator for one evaluation pass (per-gate notes + outcome). */
     private static final class TraceCtx {
@@ -201,14 +175,17 @@ public class DecisionAgent {
         saveTrace(ctx, "REJECTED", stage, reason, 0);
     }
 
-    @Transactional
     public void evaluateMarketForSignals(MarketSnapshot latest, Double prevSpot) {
-        log.info("Decision Agent executing trade signals search...");
+        evaluateMarketForSignals(latest, prevSpot, java.util.UUID.randomUUID().toString().substring(0, 8));
+    }
+
+    @Transactional
+    public void evaluateMarketForSignals(MarketSnapshot latest, Double prevSpot, String cycleId) {
+        log.info("[cycle {}] Decision Agent executing trade signals search...", cycleId);
 
         // P5-2: everything below is scoped to this snapshot's instrument (NIFTY, BANKNIFTY, ...).
         String instrument = latest.getInstrument() != null ? latest.getInstrument() : "NIFTY";
         // Phase-0 trace: one record per evaluation pass so the gate funnel is queryable.
-        String cycleId = java.util.UUID.randomUUID().toString().substring(0, 8);
         TraceCtx trace = new TraceCtx(cycleId, instrument, latest.getSnapshotTime());
 
         com.nifty.analysis.instrument.InstrumentSpec spec = instrumentRegistry.get(instrument);
@@ -237,6 +214,17 @@ public class DecisionAgent {
             log.warn("No option snapshots available for {}. Cannot evaluate trading signals.", instrument);
             reject(trace, "no_option_chain", "no option snapshots for " + instrument);
             return;
+        }
+
+        // DB-P16-3: don't trade against a stale option chain (e.g. the option feed froze while index
+        // ticks kept flowing). Compare the chain's age to the market tick time.
+        if (maxOptionStalenessSeconds > 0 && latest.getSnapshotTime() != null) {
+            long optionAgeSec = java.time.Duration.between(latestOptionTime, latest.getSnapshotTime()).getSeconds();
+            if (optionAgeSec > maxOptionStalenessSeconds) {
+                reject(trace, "stale_option_chain",
+                        "option chain " + optionAgeSec + "s older than market tick (max " + maxOptionStalenessSeconds + "s)");
+                return;
+            }
         }
 
         List<OptionSnapshot> optionChainEntities = optionSnapshotRepository.findByInstrumentAndSnapshotTime(instrument, latestOptionTime);
@@ -424,261 +412,26 @@ public class DecisionAgent {
         String thesis = llmService.generateTradeExplanation(
                 signalType, atmStrike, finalConfidence, rawResult.factorScores(), criticSummary.toString());
 
-        // 6.5 P5-1: pick a strategy by regime. Multi-leg (defined-risk spread / iron condor) replaces
-        // the single-leg ladder. Config-gated: when spreads-enabled is off, this is always LONG_CALL/PUT.
+        // 6.5 Pick a strategy by regime, then DELEGATE emission (build/price/execute/persist/notify)
+        // to SignalEmissionService (Phase-3 SRP: DecisionAgent decides; the service emits).
         com.nifty.analysis.strategy.StrategyType strategy =
                 strategySelector.select(regimeResponse.bias(), isBullish);
-        if (strategy.isMultiLeg()) {
-            emitMultiLegSignal(spec, strategy, atmStrike, finalConfidence, latest.getIndiaVix(), thesis);
-            trace.note("emit", "multi-leg " + strategy + " @ " + atmStrike);
-            saveTrace(trace, "EMITTED", null, null, 1);
-            return;
-        }
+        com.nifty.analysis.service.SignalEmissionService.EmissionResult emission = signalEmissionService.emit(
+                spec, strategy, atmStrike, isBullish, signalType, spotPrice, finalConfidence,
+                modelConfidence, agentConfidence, rawConfidence, modelReady, modelWeight,
+                rawResult, criticResult, optionChainEntities, thesis, latest.getIndiaVix());
 
-        // 7. Strike ladder: emit a signal for every liquid, non-duplicate candidate strike
-        // (ITM / ATM / OTM). ITM has the highest delta so it captures the 2% premium move
-        // most reliably; ATM/OTM add trade count.
-        List<Integer> candidateStrikes = buildCandidateStrikes(atmStrike, isBullish, spec.strikeStep());
-        int emitted = 0;
-        double vix = latest.getIndiaVix();
-        int ladderLegs = candidateStrikes.size();
-        for (int strike : candidateStrikes) {
-            if (emitSignalForStrike(spec, strike, signalType, isBullish, spotPrice, finalConfidence,
-                    modelConfidence, agentConfidence, rawConfidence, modelReady, rawResult, criticResult,
-                    optionChainEntities, thesis, vix, ladderLegs)) {
-                emitted++;
-            }
-        }
-        log.info("Strike-ladder evaluation complete: {} signal(s) emitted from {} candidate strike(s).",
-                emitted, candidateStrikes.size());
-        if (emitted > 0) {
-            trace.note("emit", emitted + " of " + candidateStrikes.size() + " ladder strikes");
-            saveTrace(trace, "EMITTED", null, null, emitted);
+        if (emission.emitted() > 0) {
+            trace.note("emit", emission.multiLeg()
+                    ? ("multi-leg " + strategy + " @ " + atmStrike)
+                    : (emission.emitted() + " of " + emission.candidates() + " ladder strikes"));
+            saveTrace(trace, "EMITTED", null, null, emission.emitted());
         } else {
-            // Passed all direction/confidence gates but every strike failed liquidity/duplicate/cap.
-            reject(trace, "per_strike_filters",
-                    "0 of " + candidateStrikes.size() + " strikes passed liquidity/duplicate/exposure");
+            reject(trace, emission.multiLeg() ? "multileg_guard" : "per_strike_filters",
+                    emission.multiLeg()
+                            ? "multi-leg guard skipped emission"
+                            : "0 of " + emission.candidates() + " strikes passed liquidity/duplicate/exposure");
         }
-    }
-
-    /**
-     * P5-1: emits ONE defined-risk multi-leg signal (spread / iron condor) and its legs. Paper-tracked
-     * (live multi-leg order placement is not wired yet); resolution is by NET P&L against the capped
-     * max-profit/max-loss. SL/target fields hold INR thresholds here (multi-leg resolution branches on
-     * the strategy tag, so it never uses them as premium levels).
-     */
-    private void emitMultiLegSignal(com.nifty.analysis.instrument.InstrumentSpec spec,
-            com.nifty.analysis.strategy.StrategyType strategy, int atmStrike, double finalConfidence,
-            double vix, String thesis) {
-        if (tradeSignalRepository.countByStatus("ACTIVE") >= maxConcurrentPositions) {
-            log.info("Max concurrent positions reached. Skipping {} {}.", spec.name(), strategy);
-            return;
-        }
-        Boolean dir = strategy.bullish();
-        String repType = (dir == null || dir) ? "BUY_CE" : "BUY_PE"; // representative tag for display/guard
-        if (tradeSignalRepository.findFirstByInstrumentAndStrikeAndSignalTypeAndStatus(
-                spec.name(), atmStrike, repType, "ACTIVE").isPresent()) {
-            log.info("Active {} {} already exists at {}. Skipping.", spec.name(), strategy, atmStrike);
-            return;
-        }
-
-        // Per-leg premium: live LTP, else a simple distance-decayed nominal (paper/sim).
-        java.util.function.BiFunction<String, Integer, Double> premiumFn = (type, strike) -> {
-            double ltp = optionPricingService.getOptionLtp("CE".equals(type) ? "BUY_CE" : "BUY_PE", strike);
-            if (ltp > 0) return ltp;
-            double otm = "CE".equals(type) ? Math.max(0, strike - atmStrike) : Math.max(0, atmStrike - strike);
-            return Math.max(5.0, 120.0 - otm * 0.4);
-        };
-
-        int qty = orderExecutionService.calculateQuantity(premiumFn.apply("CE", atmStrike), 1, spec.lotSize());
-        com.nifty.analysis.strategy.StrategyBuilder.Built built = com.nifty.analysis.strategy.StrategyBuilder.build(
-                strategy, atmStrike, spec.strikeStep(), spreadWidthSteps, premiumFn, qty);
-
-        TradeSignal signal = new TradeSignal();
-        signal.setInstrument(spec.name());
-        signal.setSignalTime(com.nifty.analysis.util.TimeUtil.nowIst());
-        signal.setSignalType(repType);
-        signal.setStrategy(strategy.name());
-        signal.setStrike(atmStrike);
-        signal.setEntry(round2(built.netPremiumPerUnit()));   // signed net (credit +, debit −) per unit
-        signal.setQuantity(qty);
-        signal.setStopLoss(round2(built.maxLossInr()));        // INR: defined-risk cap
-        signal.setTarget1(round2(built.maxProfitInr() * multiLegTargetFraction));
-        signal.setTarget2(round2(built.maxProfitInr() * multiLegTargetFraction)); // INR: take-profit
-        signal.setConfidence(round2(finalConfidence));
-        signal.setStatus("ACTIVE");
-        signal.setThesis(thesis);
-        tradeSignalRepository.save(signal);
-
-        List<com.nifty.analysis.entity.TradeLeg> legs = new ArrayList<>();
-        for (com.nifty.analysis.strategy.StrategyBuilder.Leg l : built.legs()) {
-            com.nifty.analysis.entity.TradeLeg leg = new com.nifty.analysis.entity.TradeLeg();
-            leg.setSignal(signal);
-            leg.setAction(l.action());
-            leg.setOptionType(l.optionType());
-            leg.setStrike(l.strike());
-            leg.setEntryPremium(round2(l.premium()));
-            leg.setQuantity(qty);
-            legs.add(leg);
-        }
-        tradeLegRepository.saveAll(legs);
-
-        SignalExplanation exp = explanation("Final_Confidence", round2(finalConfidence), "Multi-leg " + strategy);
-        exp.setSignal(signal);
-        signalExplanationRepository.saveAll(List.of(exp));
-
-        telegramBotService.sendSignal(signal, List.of(
-                "*Strategy:* " + strategy + " (defined risk)",
-                "*Thesis:* " + thesis,
-                String.format("Max profit %.0f / Max loss %.0f INR (%d legs)",
-                        built.maxProfitInr(), built.maxLossInr(), legs.size())));
-        log.info("Emitted {} {} multi-leg signal id={} ({} legs, net={}, maxProfit={}, maxLoss={}).",
-                spec.name(), strategy, signal.getId(), legs.size(), signal.getEntry(),
-                built.maxProfitInr(), built.maxLossInr());
-    }
-
-    /** Builds the ITM/ATM/OTM candidate strikes for the ladder (ITM first), using the instrument's step. */
-    private List<Integer> buildCandidateStrikes(int atmStrike, boolean isBullish, int step) {
-        if (!strikeLadderEnabled) {
-            return List.of(atmStrike);
-        }
-        int itm = isBullish ? atmStrike - step : atmStrike + step;
-        int otm = isBullish ? atmStrike + step : atmStrike - step;
-        return List.of(itm, atmStrike, otm);
-    }
-
-    /** Emits one signal for a strike if it is non-duplicate and liquid. Returns true if emitted. */
-    private boolean emitSignalForStrike(com.nifty.analysis.instrument.InstrumentSpec spec, int strike, String signalType, boolean isBullish, double spotPrice,
-            double finalConfidence, double modelConfidence, double agentConfidence, double rawConfidence,
-            boolean modelReady, ConfidenceEngine.RawConfidenceResult rawResult, CriticAgent.CriticResult criticResult,
-            List<OptionSnapshot> optionChainEntities, String thesis, double vix, int splitAcross) {
-
-        // Aggregate exposure cap: stop opening new positions once the max are already open.
-        long openPositions = tradeSignalRepository.countByStatus("ACTIVE");
-        if (openPositions >= maxConcurrentPositions) {
-            log.info("Max concurrent positions reached ({}/{}). Skipping strike {}.",
-                    openPositions, maxConcurrentPositions, strike);
-            return false;
-        }
-
-        // Per-strike duplicate guard (scoped to the instrument)
-        if (tradeSignalRepository.findFirstByInstrumentAndStrikeAndSignalTypeAndStatus(
-                spec.name(), strike, signalType, "ACTIVE").isPresent()) {
-            log.info("Active {} signal already exists for strike {} {}. Skipping.", spec.name(), strike, signalType);
-            return false;
-        }
-
-        // Per-strike liquidity guard — never trade an illiquid strike where the 2% target is just spread.
-        OptionSnapshot strikeSnap = optionChainEntities.stream()
-                .filter(o -> o.getStrikePrice() != null && o.getStrikePrice() == strike)
-                .findFirst().orElse(null);
-        if (strikeSnap == null) {
-            log.info("No option snapshot for strike {}. Skipping.", strike);
-            return false;
-        }
-        AgentResponse liquidity = liquidityAgent.evaluateStrike(strikeSnap, isBullish);
-        if (liquidity.score() < minLiquidityScore) {
-            log.info("Strike {} liquidity {}% below minimum {}%. Skipping.", strike, liquidity.score(), minLiquidityScore);
-            return false;
-        }
-
-        // Pricing from the real option premium (LTP), with fallback. Target/SL formulas unchanged.
-        double entry = optionPricingService.getOptionLtp(signalType, strike);
-        if (entry <= 0) {
-            entry = 150.0; // fallback when live LTP is unavailable (simulation / no broker session)
-            log.info("Live option LTP unavailable for {} {}. Using fallback entry premium {}.", signalType, strike, entry);
-        }
-        double target1 = round2(entry * (1.0 + targetProfitPercent / 200.0));
-        double target2 = round2(entry * (1.0 + targetProfitPercent / 100.0));
-        double stopLoss = round2(entry * (1.0 - stopLossPercent / 100.0));
-        int quantity = orderExecutionService.calculateQuantity(entry, splitAcross, spec.lotSize());
-
-        // Risk assessment (advisory): evaluate R:R + volatility risk. Surfaced/logged for
-        // every signal — NOT a hard block (the configured 2% target / 40% stop intentionally
-        // scores low here; blocking would suppress all trades).
-        AgentResponse risk = riskAgent.evaluateRisk(entry, stopLoss, target1, vix);
-        if (!"BULLISH".equals(risk.bias())) {
-            log.warn("Risk advisory UNFAVOURABLE for {} {} (score={}%): {}", signalType, strike,
-                    round2(risk.score()), String.join("; ", risk.comments()));
-        }
-
-        // Place the order FIRST, then only persist an ACTIVE signal if it actually went
-        // through (PLACED) or is an intentional paper/simulated trade (SKIPPED). A FAILED
-        // live order must NOT leave a phantom ACTIVE position with no real fill behind it.
-        OrderExecutionService.OrderResult order =
-                orderExecutionService.executeOrder(signalType, strike, spotPrice, splitAcross);
-        if (order.outcome() == OrderExecutionService.OrderResult.Outcome.FAILED) {
-            log.warn("Order FAILED for {} {} — not creating a phantom ACTIVE signal.", signalType, strike);
-            return false;
-        }
-
-        TradeSignal signal = new TradeSignal();
-        signal.setInstrument(spec.name());
-        signal.setSignalTime(com.nifty.analysis.util.TimeUtil.nowIst());
-        signal.setSignalType(signalType);
-        signal.setStrike(strike);
-        signal.setEntry(round2(entry));
-        signal.setQuantity(quantity);
-        signal.setStopLoss(stopLoss);
-        signal.setTarget1(target1);
-        signal.setTarget2(target2);
-        signal.setConfidence(finalConfidence);
-        signal.setStatus("ACTIVE");
-        signal.setThesis(thesis);
-        signal.setOrderId(order.orderId()); // broker order id when PLACED; null for paper
-        signal.setEntrySpot(round2(spotPrice)); // capture entry spot instead of reconstructing later
-        tradeSignalRepository.save(signal);
-
-        // Explanations: provenance + factor scores + critic penalties + liquidity.
-        List<SignalExplanation> explanations = new ArrayList<>();
-        explanations.add(explanation("Model_ONNX", round2(modelConfidence),
-                "ONNX model directional confidence" + (modelReady ? "" : " (NOT used — model not ready)")));
-        explanations.add(explanation("Agent_Weighted", round2(agentConfidence),
-                "Rule-based multi-agent weighted confidence"));
-        explanations.add(explanation("Blended_Raw", round2(rawConfidence),
-                modelReady
-                        ? String.format("Blend: %.2f*ONNX + %.2f*Agent", modelWeight, 1.0 - modelWeight)
-                        : "Agent-only (ONNX not ready)"));
-        explanations.add(explanation("Final_Confidence", round2(finalConfidence),
-                String.format("After critic penalties; gating threshold = %.1f%%", gatingThreshold)));
-        explanations.add(explanation("Liquidity", round2(liquidity.score()),
-                "Strike liquidity score (" + strikeClass(strike, spotPrice, isBullish, spec.strikeStep()) + ")"));
-        explanations.add(explanation("Risk_RR", round2(risk.score()),
-                "Risk advisory: " + String.join("; ", risk.comments())));
-        for (Map.Entry<String, Double> entryScore : rawResult.factorScores().entrySet()) {
-            explanations.add(explanation(entryScore.getKey(), entryScore.getValue(),
-                    "Factor raw score = " + entryScore.getValue()));
-        }
-        for (CriticAgent.PenaltyDetails penalty : criticResult.appliedPenalties()) {
-            explanations.add(explanation(penalty.factor(), penalty.scoreAdjustment(), penalty.comment()));
-        }
-        for (SignalExplanation e : explanations) {
-            e.setSignal(signal);
-        }
-        signalExplanationRepository.saveAll(explanations);
-        log.info("Saved trade signal (id={}, strike={}) and {} scoring explanations.", signal.getId(), strike, explanations.size());
-
-        // Notify via Telegram Bot
-        List<String> reasons = new ArrayList<>();
-        reasons.add("*Thesis:* " + thesis);
-        reasons.add(isBullish ? "Bullish trend structure" : "Bearish trend structure");
-        reasons.add("Strike " + strike + " (" + strikeClass(strike, spotPrice, isBullish, spec.strikeStep()) + ") — liquidity confirmed");
-        reasons.add((("BULLISH".equals(risk.bias())) ? "Risk OK: " : "⚠️ Risk: ") + String.join("; ", risk.comments()));
-        for (CriticAgent.PenaltyDetails p : criticResult.appliedPenalties()) {
-            reasons.add("Critic Penalty: " + p.comment());
-        }
-        telegramBotService.sendSignal(signal, reasons);
-        return true;
-    }
-
-    /** Classifies a strike as ITM/ATM/OTM relative to spot for the given direction. */
-    private static String strikeClass(int strike, double spot, boolean isBullish, int step) {
-        int atm = (int) (Math.round(spot / step) * step);
-        if (strike == atm) {
-            return "ATM";
-        }
-        boolean itm = isBullish ? strike < atm : strike > atm;
-        return itm ? "ITM" : "OTM";
     }
 
     /** True during the volatile open (09:15–09:30) and theta-heavy close (15:00–15:30) IST windows. */
@@ -752,17 +505,5 @@ public class DecisionAgent {
     // to 0 made the min-confirmation gate fail closed whenever a factor was absent (Phase-1 fix DA-F2).
     private static double factor(Map<String, Double> f, String key) {
         return f.getOrDefault(key, 50.0);
-    }
-
-    private static double round2(double value) {
-        return Math.round(value * 100.0) / 100.0;
-    }
-
-    private static SignalExplanation explanation(String factor, double score, String comment) {
-        SignalExplanation exp = new SignalExplanation();
-        exp.setFactor(factor);
-        exp.setScore(score);
-        exp.setComment(comment);
-        return exp;
     }
 }

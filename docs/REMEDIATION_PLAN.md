@@ -78,21 +78,25 @@ R1 (over-gating) explains *no trades*. R2 (silent fallbacks) + R3 (no observabil
 - **Exit (met in code):** the fail-closed gates are softened and measurable; deploy, watch `/decision-funnel` move vs the Phase-0 baseline. Target a *sane* frequency, not max — tune `min-direction-agreement`/penalties from the funnel + win-rate.
 - ⚠️ **Owner decisions pending:** the 2%/20% target/stop R:R (root of the calibration problem) and whether to raise consensus back to 3 once data shows quality.
 
-### Phase 2 — Signal quality & diagnosability 🟠
+### Phase 2 — Signal quality & diagnosability 🟠 — ✅ IMPLEMENTED (not yet deployed)
 **Goal:** the trades that now generate are *good*, and we can debug them.
-- `TechnicalAgent`: actually use the computed MACD / Bollinger-width / volume-ratio in scoring (audit #4; T20-4).
-- `LiquidityAgent`: replace simulated spread / static OI with real depth/quote; make the floor config-driven (audit #5; T20-5).
-- Data synchronization: add a **collection-cycle id** stamped across snapshot/option/candle rows; validate repo freshness on read (audit #6/#8).
-- Options analytics: extend beyond PCR/OI/MaxPain toward IV/GEX where data allows (audit #11).
-- Risk: optional ATR/VIX-adaptive SL/TP (audit #10) — **coordinate with owner** given the intentional 2%/40%.
-- **Exit:** every generated/rejected signal has a full decision trace; liquidity reflects real book.
+- ✅ `TechnicalAgent` now uses **MACD histogram + volume ratio + Bollinger width** in the rule score (audit #4/ML-P10-1), not just EMA/RSI/VWAP.
+- ✅ `OptionsAgent` build-up **bias mapping corrected** (writer economics — call writing = bearish, put writing = bullish; AG-F8) and **strike step + ATM inferred from the chain** so it works for BANKNIFTY, not a hardcoded 50-grid (AG-F7). Window widened to ±2 steps.
+- ✅ `LiquidityAgent` continuous + null-safe (done Phase 1). *Real bid/ask depth not available from the feed (only LTP) — removed the fake-spread pass; spread term dropped rather than faked.*
+- ✅ **Collection-cycle id** (CS-P12-04): generated per cycle in the collector, threaded into `DecisionAgent.evaluateMarketForSignals(.., cycleId)` and the DecisionTrace, so collector logs ↔ decision trace correlate end-to-end.
+- ✅ **Option-snapshot freshness guard** (DB-P16-3): `DecisionAgent` rejects (stage `stale_option_chain`) when the chain is older than `nifty.signal.max-option-staleness-seconds:300` vs the market tick.
+- ✅ **WebSocket multi-record framing** (DB-P16-1): `routeFrame` now parses ALL records packed in a binary message (stride per mode: LTP 51 / Quote 123 / SnapQuote 379), with a safe single-record fallback — was dropping all but the first tick.
+- ⛔ **Training/serving feature skew** (ML-P7-3): not addressed — needs retraining the model on engine-produced features (or aligning the serving feature computation). Larger ML task; ONNX is only weight-0.4, so quality-not-liveness.
+- ⛔ Risk ATR/VIX-adaptive SL/TP (audit #10) — deferred; **owner decision** given the 2%/20% choice.
+- **Exit (met in code):** every evaluation has a full decision trace with a cycle id; OI logic is correct + instrument-agnostic; stale option data can't drive a trade; live ticks aren't dropped.
 
-### Phase 3 — Architecture & maintainability 🟡
+### Phase 3 — Architecture & maintainability 🟡 — 🔄 PARTIALLY DONE (not deployed)
 **Goal:** make future change safe (kills R5/R6).
-- Decompose `DecisionAgent` → `DecisionCoordinator → ValidationPipeline → SignalFactory → ExecutionPipeline → NotificationPipeline` (audit #217/#224; T19-1).
-- Centralize all thresholds/magic numbers into one typed `TradingPolicy` config (audit #218/#219/#222; T19-2).
-- Separate domain model: `Signal → Order → Position → TradeResult` (audit #220).
-- **Exit:** the gate policy is readable in one place; pipeline stages are independently unit-testable.
+- ✅ **DecisionAgent decomposed (the core SRP fix, audit #217/#224):** extracted `SignalEmissionService` — all emit/price/execute/persist/notify logic (the strike ladder, multi-leg, per-strike guards, order placement, signal+legs+explanation persistence, Telegram) moved out. `DecisionAgent` now only decides + traces and delegates via `signalEmissionService.emit(...)`. Removed ~8 emission-only deps + ~8 config fields from DecisionAgent. Logic moved verbatim (no behaviour change); tests migrated — gate tests stay in `DecisionAgentTest` (verify delegation), emission internals in new `SignalEmissionServiceTest`. 141 tests green.
+- ⛔ Further split (`ValidationPipeline` / `SignalFactory` / `ExecutionPipeline` / `NotificationPipeline`) — not done; the emission extraction is the highest-value cut. Do the rest against a deployed baseline.
+- ⛔ Centralize thresholds into one typed `TradingPolicy` config (#218/#219/#222) — not done (large test churn; lower impact now that the two classes are smaller).
+- ⛔ Separate domain model `Signal → Order → Position → TradeResult` (#220) — not done.
+- **Exit (partial):** DecisionAgent and SignalEmissionService are each independently unit-testable; the god-class is split. Remaining items are incremental.
 
 ### Phase 4 — Adaptive AI 🟡
 **Goal:** move from rule-engine-with-ML toward an adaptive engine (audit Phase 18).

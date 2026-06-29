@@ -170,16 +170,43 @@ public class AngelOneStreamClient {
         if (running) scheduler.schedule(this::connect, 5, TimeUnit.SECONDS);
     }
 
+    /**
+     * Routes a binary message. SmartWebSocketV2 can pack MULTIPLE fixed-length records into one
+     * message (Phase-2 DB-P16-1) — iterate in record-length strides and parse each, instead of only
+     * the first record at offset 0. Falls back to a single parse if the payload isn't a clean
+     * multiple of the record length (so a layout surprise degrades safely, not silently).
+     */
     private void routeFrame(byte[] data) {
         if (data == null || data.length < 1) return;
         int mode = data[0] & 0xFF;
+        int recLen = recordLength(mode);
+        if (recLen <= 0 || data.length % recLen != 0) {
+            routeOne(data, 0, mode); // unknown mode / non-aligned payload → legacy single-record parse
+            return;
+        }
+        for (int off = 0; off + recLen <= data.length; off += recLen) {
+            routeOne(data, off, data[off] & 0xFF);
+        }
+    }
+
+    private void routeOne(byte[] data, int off, int mode) {
         if (mode == 1) {
-            Tick t = parseTick(data);
+            Tick t = parseTick(data, off);
             if (t != null) onIndexTick(t);
         } else if (mode == 3) {
-            SnapQuoteTick t = parseSnapQuote(data);
+            SnapQuoteTick t = parseSnapQuote(data, off);
             if (t != null) onOptionTick(t);
         }
+    }
+
+    /** SmartWebSocketV2 record lengths: LTP=51, Quote=123, SnapQuote=379 bytes. -1 = unknown. */
+    private static int recordLength(int mode) {
+        return switch (mode) {
+            case 1 -> 51;
+            case 2 -> 123;
+            case 3 -> 379;
+            default -> -1;
+        };
     }
 
     private void onIndexTick(Tick tick) {
@@ -251,28 +278,34 @@ public class AngelOneStreamClient {
     /** Parsed SnapQuote tick (option) — token, LTP, open interest, volume. */
     record SnapQuoteTick(String token, double ltp, long oi, long volume) {}
 
-    private static String readToken(byte[] data) {
-        int end = 2;
-        while (end < 27 && data[end] != 0) end++;
-        return new String(data, 2, end - 2, StandardCharsets.US_ASCII).trim();
+    private static String readToken(byte[] data, int off) {
+        int start = off + 2;
+        int end = start;
+        int limit = Math.min(off + 27, data.length);
+        while (end < limit && data[end] != 0) end++;
+        return new String(data, start, end - start, StandardCharsets.US_ASCII).trim();
     }
 
-    /** LTP mode: mode@0, exchType@1, token@2..26, LTP int64 paise @43. */
-    static Tick parseTick(byte[] data) {
-        if (data == null || data.length < 51) return null;
-        long ltpPaise = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).getLong(43);
-        return new Tick(data[0] & 0xFF, data[1] & 0xFF, readToken(data), ltpPaise / 100.0);
+    /** LTP mode: mode@0, exchType@1, token@2..26, LTP int64 paise @43 (offsets relative to the record). */
+    static Tick parseTick(byte[] data, int off) {
+        if (data == null || data.length < off + 51) return null;
+        long ltpPaise = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).getLong(off + 43);
+        return new Tick(data[off] & 0xFF, data[off + 1] & 0xFF, readToken(data, off), ltpPaise / 100.0);
     }
 
-    /** SnapQuote mode: token@2..26, LTP @43, Volume @67, Open Interest @131 (all int64 LE). */
-    static SnapQuoteTick parseSnapQuote(byte[] data) {
-        if (data == null || data.length < 139) return null; // need through OI (bytes 131..138)
+    /** SnapQuote mode: token@2..26, LTP @43, Volume @67, Open Interest @131 (int64 LE, record-relative). */
+    static SnapQuoteTick parseSnapQuote(byte[] data, int off) {
+        if (data == null || data.length < off + 139) return null; // need through OI (bytes 131..138)
         ByteBuffer bb = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
-        double ltp = bb.getLong(43) / 100.0;
-        long volume = bb.getLong(67);
-        long oi = bb.getLong(131);
-        return new SnapQuoteTick(readToken(data), ltp, oi, volume);
+        double ltp = bb.getLong(off + 43) / 100.0;
+        long volume = bb.getLong(off + 67);
+        long oi = bb.getLong(off + 131);
+        return new SnapQuoteTick(readToken(data, off), ltp, oi, volume);
     }
+
+    // Single-record overloads (offset 0) — kept for callers/tests that pass one record.
+    static Tick parseTick(byte[] data) { return parseTick(data, 0); }
+    static SnapQuoteTick parseSnapQuote(byte[] data) { return parseSnapQuote(data, 0); }
 
     private class FeedListener implements WebSocket.Listener {
         private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();

@@ -80,9 +80,36 @@ public class TechnicalAgent {
             }
         }
 
+        // 4. Engineered momentum/participation features (Phase-2 ML-P10-1): MACD histogram and
+        // volume ratio were computed for the ML model but never used in the rule score. Add them so
+        // the directional vote reflects momentum + participation, not just EMA/RSI/VWAP structure.
+        try {
+            TechnicalFeatures f = getFeatures(latest);
+            if (f.macdHist() > 0) {
+                score += 10.0;
+                comments.add("MACD histogram positive (bullish momentum)");
+            } else if (f.macdHist() < 0) {
+                score -= 10.0;
+                comments.add("MACD histogram negative (bearish momentum)");
+            }
+            if (f.volumeRatio() >= 1.2) {
+                score += 5.0;
+                comments.add("Above-average volume confirms participation (" + round2(f.volumeRatio()) + "x)");
+            }
+            // Bollinger squeeze (very low width) = range, not trend — pull an extreme score toward neutral.
+            if (f.bbWidth() > 0 && f.bbWidth() < 0.01) {
+                score = 50.0 + (score - 50.0) * 0.7;
+                comments.add("Bollinger squeeze (low volatility) — reduced trend conviction");
+            }
+        } catch (Exception e) {
+            comments.add("Engineered features unavailable for this tick");
+        }
+
         score = Math.max(0.0, Math.min(100.0, score));
         String bias = score >= 60.0 ? "BULLISH" : (score <= 40.0 ? "BEARISH" : "NEUTRAL");
 
         return new AgentResponse(score, bias, comments);
     }
+
+    private static double round2(double v) { return Math.round(v * 100.0) / 100.0; }
 }

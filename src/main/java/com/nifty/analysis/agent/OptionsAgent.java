@@ -51,33 +51,44 @@ public class OptionsAgent {
             comments.add("Index trading below Max Pain strike (" + maxPain + "), putting pressure on Put writers");
         }
 
-        // 3. Evaluate strike-wise build-up near ATM
-        int atmStrike = ((int) Math.round(spotPrice / 50.0)) * 50;
-        int longBuildUpCount = 0;
-        int shortCoveringCount = 0;
-        int shortBuildUpCount = 0;
-        
+        // 3. Evaluate strike-wise build-up near ATM. Strike step + ATM are inferred from the chain
+        // (Phase-2 AG-F7) so this works for any instrument (NIFTY 50, BANKNIFTY 100, ...), not a
+        // hardcoded 50-grid. Bullish/bearish tallies follow option-WRITER economics (Phase-2 AG-F8).
+        int step = inferStrikeStep(optionChain);
+        int atmStrike = nearestStrike(optionChain, spotPrice);
+        int window = 2 * step;
+        int bullishBuildUp = 0;
+        int bearishBuildUp = 0;
+
         for (OptionSnapshotDto strike : optionChain) {
-            // Focus on ATM +/- 100 points
-            if (Math.abs(strike.strikePrice() - atmStrike) <= 100) {
+            if (Math.abs(strike.strikePrice() - atmStrike) <= window) {
                 long ceOiChange = strike.ceOiChange() != null ? strike.ceOiChange() : 0L;
                 long peOiChange = strike.peOiChange() != null ? strike.peOiChange() : 0L;
 
                 OptionsIndicatorService.BuildUpType ceType = optionsIndicatorService.detectBuildUp(true, spotChange, ceOiChange);
                 OptionsIndicatorService.BuildUpType peType = optionsIndicatorService.detectBuildUp(false, spotChange, peOiChange);
 
-                if (ceType == OptionsIndicatorService.BuildUpType.LONG_BUILD_UP) shortBuildUpCount++; // Call buying is bullish, but heavy Call writing is bearish
-                if (ceType == OptionsIndicatorService.BuildUpType.SHORT_COVERING) shortCoveringCount++; // Call shorts covered (bullish)
-                if (peType == OptionsIndicatorService.BuildUpType.LONG_BUILD_UP) longBuildUpCount++; // Put writing / Put long build-up
+                // CALL: buying (LONG_BUILD_UP) & short-covering = bullish; writing (SHORT_BUILD_UP) & unwinding = bearish.
+                switch (ceType) {
+                    case LONG_BUILD_UP, SHORT_COVERING -> bullishBuildUp++;
+                    case SHORT_BUILD_UP, LONG_UNWINDING -> bearishBuildUp++;
+                }
+                // PUT: buying = bearish; writing (support) & unwinding = bullish; short-covering = bearish.
+                switch (peType) {
+                    case SHORT_BUILD_UP, LONG_UNWINDING -> bullishBuildUp++;
+                    case LONG_BUILD_UP, SHORT_COVERING -> bearishBuildUp++;
+                }
             }
         }
 
-        if (shortCoveringCount > 0 || longBuildUpCount > shortBuildUpCount) {
+        if (bullishBuildUp > bearishBuildUp) {
             score += 15.0;
-            comments.add("Active bullish OI build-up near ATM strikes (Put writing and Call short-covering)");
-        } else if (shortBuildUpCount > longBuildUpCount) {
+            comments.add("Bullish OI build-up near ATM (put writing / call buying dominates, "
+                    + bullishBuildUp + " vs " + bearishBuildUp + ")");
+        } else if (bearishBuildUp > bullishBuildUp) {
             score -= 15.0;
-            comments.add("Active bearish OI build-up near ATM strikes (Call writing dominance)");
+            comments.add("Bearish OI build-up near ATM (call writing / put buying dominates, "
+                    + bearishBuildUp + " vs " + bullishBuildUp + ")");
         }
 
         // 4. Calculate Volume-weighted PCR
@@ -134,5 +145,32 @@ public class OptionsAgent {
         String bias = score >= 60.0 ? "BULLISH" : (score <= 40.0 ? "BEARISH" : "NEUTRAL");
 
         return new AgentResponse(score, bias, comments);
+    }
+
+    /** Smallest positive gap between consecutive strikes = the instrument's strike step (default 50). */
+    private static int inferStrikeStep(List<OptionSnapshotDto> chain) {
+        int step = Integer.MAX_VALUE;
+        List<Integer> strikes = chain.stream()
+                .map(OptionSnapshotDto::strikePrice)
+                .filter(java.util.Objects::nonNull)
+                .sorted()
+                .toList();
+        for (int i = 1; i < strikes.size(); i++) {
+            int gap = strikes.get(i) - strikes.get(i - 1);
+            if (gap > 0) step = Math.min(step, gap);
+        }
+        return step == Integer.MAX_VALUE ? 50 : step;
+    }
+
+    /** The actual chain strike nearest to spot (no fixed-grid assumption). */
+    private static int nearestStrike(List<OptionSnapshotDto> chain, double spotPrice) {
+        int nearest = (int) Math.round(spotPrice);
+        double best = Double.MAX_VALUE;
+        for (OptionSnapshotDto s : chain) {
+            if (s.strikePrice() == null) continue;
+            double d = Math.abs(s.strikePrice() - spotPrice);
+            if (d < best) { best = d; nearest = s.strikePrice(); }
+        }
+        return nearest;
     }
 }

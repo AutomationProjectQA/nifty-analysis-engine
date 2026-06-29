@@ -278,20 +278,24 @@ public class MarketCollectorService {
      * can't pile up (a still-running decision means this cycle's evaluation is skipped).
      */
     private void dispatchDecision(MarketSnapshot snapshot, Double prevSpot) {
+        // Per-cycle correlation id (CS-P12-04): ties the collector cycle to its (async) decision
+        // trace/logs so "why no trade" can be traced end-to-end.
+        String cycleId = java.util.UUID.randomUUID().toString().substring(0, 8);
         if (!asyncDecisions) {
-            decisionAgent.evaluateMarketForSignals(snapshot, prevSpot);
+            decisionAgent.evaluateMarketForSignals(snapshot, prevSpot, cycleId);
             return;
         }
         if (!decisionRunning.compareAndSet(false, true)) {
             log.warn("Previous decision still running — skipping this cycle's evaluation to keep data collection on time.");
             return;
         }
+        log.info("[{}] cycle {} dispatching decision (spot={}).", snapshot.getInstrument(), cycleId, snapshot.getNiftySpot());
         try {
             decisionExecutor.execute(() -> {
                 try {
-                    decisionAgent.evaluateMarketForSignals(snapshot, prevSpot);
+                    decisionAgent.evaluateMarketForSignals(snapshot, prevSpot, cycleId);
                 } catch (Exception e) {
-                    log.error("Async decision evaluation failed", e);
+                    log.error("[cycle {}] Async decision evaluation failed", cycleId, e);
                 } finally {
                     decisionRunning.set(false);
                 }
