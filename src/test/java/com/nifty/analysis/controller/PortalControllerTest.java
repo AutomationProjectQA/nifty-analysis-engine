@@ -50,6 +50,18 @@ public class PortalControllerTest {
     private com.nifty.analysis.repository.DecisionTraceRepository decisionTraceRepository;
 
     @MockBean
+    private com.nifty.analysis.service.CalibrationMonitorService calibrationMonitorService;
+
+    @MockBean
+    private com.nifty.analysis.service.FactorEffectivenessService factorEffectivenessService;
+
+    @MockBean
+    private com.nifty.analysis.service.DriftMonitorService driftMonitorService;
+
+    @MockBean
+    private com.nifty.analysis.backtest.ReplayHarnessService replayHarnessService;
+
+    @MockBean
     private ContentGenerationService contentGenerationService;
 
     @Test

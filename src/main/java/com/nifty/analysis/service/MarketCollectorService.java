@@ -368,9 +368,11 @@ public class MarketCollectorService {
                 resolveMultiLeg(signal, latest, theoByStrike);
                 continue;
             }
-            // Prefer the entry spot stored on the signal; reconstruct only for legacy rows.
+            // Prefer the entry spot stored on the signal; reconstruct only for legacy rows
+            // (instrument-scoped so a multi-instrument DB can't reconstruct from the wrong index).
+            String sigInstr = signal.getInstrument() != null ? signal.getInstrument() : "NIFTY";
             double entrySpot = signal.getEntrySpot() != null ? signal.getEntrySpot()
-                    : marketSnapshotRepository.findLatestBefore(signal.getSignalTime())
+                    : marketSnapshotRepository.findLatestBeforeByInstrument(sigInstr, signal.getSignalTime())
                             .map(MarketSnapshot::getNiftySpot).orElse(spot);
 
             boolean isCall = "BUY_CE".equals(signal.getSignalType());
@@ -626,7 +628,8 @@ public class MarketCollectorService {
             sb.append("  _None_\n");
         } else {
             for (TradeSignal t : activeTrades) {
-                Optional<MarketSnapshot> entrySnapshot = marketSnapshotRepository.findLatestBefore(t.getSignalTime());
+                String tInstr = t.getInstrument() != null ? t.getInstrument() : "NIFTY";
+                Optional<MarketSnapshot> entrySnapshot = marketSnapshotRepository.findLatestBeforeByInstrument(tInstr, t.getSignalTime());
                 double entrySpot = entrySnapshot.map(MarketSnapshot::getNiftySpot).orElse(latest.getNiftySpot());
                 boolean isCall = "BUY_CE".equals(t.getSignalType());
                 double currentOptionPrice = isCall ? t.getEntry() + (latest.getNiftySpot() - entrySpot) * 0.5

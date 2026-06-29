@@ -95,6 +95,11 @@ nifty:
     # Phase-2 DB-P16-3: reject if the latest option chain is older than this vs the market tick
     # (don't trade against a frozen option feed). 0 disables.
     max-option-staleness-seconds: 300
+    # Audit #206: ML candidate re-scoring — let the ONNX model RESCUE a candidate the confidence-score
+    # gate rejected, when its directional probability is >= ml-rescue-min-probability. Overrides only
+    # the scoring gate; the rescued candidate still must pass min-confirmation/calibration/liquidity.
+    ml-rescue-enabled: true
+    ml-rescue-min-probability: 0.75
 
   # Phase-1 AG-F4: continuous, config-driven liquidity scoring (was a binary OI>=50k gate with a
   # fake spread pass). Score ramps with OI; unknown OI is allowed with a neutral score, not rejected.
@@ -119,7 +124,11 @@ nifty:
   # you want it — keep it OFF for the live Nifty paper test so the portal/feed isn't mixed. Live Angel
   # One Bank Nifty fetch isn't wired yet, so enable this mainly with provider=simulated.
   instruments:
-    banknifty-enabled: true
+    # DISABLED: live Angel One fetch is NOT wired for BANKNIFTY, so it ran on the simulated ~23,500
+    # fallback and (being the last instrument written each cycle) polluted the unscoped "latest"
+    # endpoints — the Nifty dashboard was showing BANKNIFTY's fake value. Re-enable only once the
+    # live BANKNIFTY quote path (correct token/exchange) is implemented + verified.
+    banknifty-enabled: false
 
   # P5-1: regime-aware DEFINED-RISK strategies (credit/debit spreads + iron condor for range/high-IV).
   # OFF until the multi-leg execution + resolution lifecycle is wired; when off the engine uses the

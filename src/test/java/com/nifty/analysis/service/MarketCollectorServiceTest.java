@@ -241,7 +241,7 @@ class MarketCollectorServiceTest {
 
         MarketSnapshot entrySnap = new MarketSnapshot();
         entrySnap.setNiftySpot(23500.0);
-        when(marketSnapshotRepository.findLatestBefore(any(LocalDateTime.class))).thenReturn(Optional.of(entrySnap));
+        when(marketSnapshotRepository.findLatestBeforeByInstrument(anyString(), any(LocalDateTime.class))).thenReturn(Optional.of(entrySnap));
 
         // Live LTP at/above Target2 (180) — resolves via the real market premium.
         when(optionPricingService.getOptionLtp("BUY_CE", 23500)).thenReturn(182.5);
@@ -276,7 +276,7 @@ class MarketCollectorServiceTest {
         activeSignal.setStatus("ACTIVE");
 
         when(tradeSignalRepository.findByInstrumentAndStatus("NIFTY", "ACTIVE")).thenReturn(List.of(activeSignal));
-        when(marketSnapshotRepository.findLatestBefore(any(LocalDateTime.class)))
+        when(marketSnapshotRepository.findLatestBeforeByInstrument(anyString(), any(LocalDateTime.class)))
                 .thenReturn(Optional.of(new MarketSnapshot()));
         // Live LTP unavailable (sentinel) ...
         when(optionPricingService.getOptionLtp("BUY_CE", 23500)).thenReturn(-1.0);
@@ -310,7 +310,7 @@ class MarketCollectorServiceTest {
         activeSignal.setStatus("ACTIVE");
 
         when(tradeSignalRepository.findByInstrumentAndStatus("NIFTY", "ACTIVE")).thenReturn(List.of(activeSignal));
-        when(marketSnapshotRepository.findLatestBefore(any(LocalDateTime.class)))
+        when(marketSnapshotRepository.findLatestBeforeByInstrument(anyString(), any(LocalDateTime.class)))
                 .thenReturn(Optional.of(new MarketSnapshot()));
         when(optionPricingService.getOptionLtp("BUY_CE", 23500)).thenReturn(-1.0);
         // latestPremiums returns the empty default (no strike) → no theoretical price.
@@ -341,7 +341,7 @@ class MarketCollectorServiceTest {
         activeSignal.setStatus("ACTIVE");
 
         when(tradeSignalRepository.findByInstrumentAndStatus("NIFTY", "ACTIVE")).thenReturn(List.of(activeSignal));
-        when(marketSnapshotRepository.findLatestBefore(any(LocalDateTime.class)))
+        when(marketSnapshotRepository.findLatestBeforeByInstrument(anyString(), any(LocalDateTime.class)))
                 .thenReturn(Optional.of(new MarketSnapshot()));
         when(optionPricingService.getOptionLtp("BUY_CE", 23500)).thenReturn(182.0); // >= target2 180
         when(optionCostService.roundTripCost(150.0, 180.0, 65)).thenReturn(200.0);

@@ -49,7 +49,7 @@ public class ContentGenerationService {
             return existing.get();
         }
 
-        Optional<MarketSnapshot> latestOpt = marketSnapshotRepository.findLatest();
+        Optional<MarketSnapshot> latestOpt = marketSnapshotRepository.findLatestByInstrument("NIFTY");
         double lastSpot = latestOpt.map(MarketSnapshot::getNiftySpot).orElse(23500.0);
         double lastVix = latestOpt.map(MarketSnapshot::getIndiaVix).orElse(13.0);
         List<OptionSnapshot> optionChain = getLatestOptionChain();
@@ -74,7 +74,7 @@ public class ContentGenerationService {
             return existing.get();
         }
 
-        Optional<MarketSnapshot> latestOpt = marketSnapshotRepository.findLatest();
+        Optional<MarketSnapshot> latestOpt = marketSnapshotRepository.findLatestByInstrument("NIFTY");
         if (latestOpt.isEmpty()) {
             log.warn("No market snapshot available for post-market report. Skipping.");
             return null;
@@ -143,9 +143,10 @@ public class ContentGenerationService {
     }
 
     private List<OptionSnapshot> getLatestOptionChain() {
-        LocalDateTime latestOptionTime = optionSnapshotRepository.findLatestSnapshotTime();
+        // Instrument-scoped to NIFTY (reports are NIFTY) — the global "latest" can be another instrument.
+        LocalDateTime latestOptionTime = optionSnapshotRepository.findLatestSnapshotTimeByInstrument("NIFTY");
         return latestOptionTime != null
-                ? optionSnapshotRepository.findBySnapshotTime(latestOptionTime)
+                ? optionSnapshotRepository.findByInstrumentAndSnapshotTime("NIFTY", latestOptionTime)
                 : Collections.emptyList();
     }
 

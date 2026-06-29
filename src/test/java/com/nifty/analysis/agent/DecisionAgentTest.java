@@ -56,6 +56,8 @@ class DecisionAgentTest {
     @Mock private OnnxModelService onnxModelService;
     @Mock private RiskGuardService riskGuardService;
     @Mock private SignalEmissionService signalEmissionService;
+    // Real policy (not a mock) so getters return the values we set; @InjectMocks injects the spy.
+    @org.mockito.Spy private com.nifty.analysis.config.TradingPolicy tradingPolicy = new com.nifty.analysis.config.TradingPolicy();
 
     @InjectMocks
     private DecisionAgent decisionAgent;
@@ -65,7 +67,7 @@ class DecisionAgentTest {
 
     @BeforeEach
     void setUp() {
-        ReflectionTestUtils.setField(decisionAgent, "gatingThreshold", 60.0);
+        ReflectionTestUtils.setField(tradingPolicy, "gatingThreshold", 60.0);
         ReflectionTestUtils.setField(decisionAgent, "modelWeight", 0.4);
         ReflectionTestUtils.setField(decisionAgent, "modelMinHistory", 50L);
         ReflectionTestUtils.setField(decisionAgent, "sidewaysExtraGate", 8.0);
@@ -371,6 +373,45 @@ class DecisionAgentTest {
         decisionAgent.evaluateMarketForSignals(latest, 23490.0);
 
         verifyEmit(times(1));
+    }
+
+    // --- #206: ML candidate re-scoring (rescue) ---
+
+    @Test
+    void mlRescue_recoversCandidateBelowGateWhenProbabilityHigh() {
+        // Confidence (50) is below the gate (60), but the ML model is strongly bullish (80% >= 75%)
+        // → rescued past the scoring gate and emitted (no other safety gate blocks here).
+        stubUpToConfidence(); // ML predictBullishProbability stubbed to 80
+        when(onnxModelService.isModelLoaded()).thenReturn(true);
+        when(marketSnapshotRepository.count()).thenReturn(100L);
+        stubAgentConfidence(50.0);
+        stubCritic(50.0); // final 50 < gate 60
+        ReflectionTestUtils.setField(decisionAgent, "mlRescueEnabled", true);
+        ReflectionTestUtils.setField(decisionAgent, "mlRescueMinProbability", 0.75);
+        when(llmService.generateTradeExplanation(anyString(), anyInt(), anyDouble(), anyMap(), anyString()))
+                .thenReturn("thesis");
+
+        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
+
+        verifyEmit(times(1));
+    }
+
+    @Test
+    void mlRescue_doesNotRecoverWhenProbabilityTooLow() {
+        // Confidence below gate AND ML probability (60%) below the rescue bar (75%) → still rejected.
+        stubUpToConfidence();
+        when(onnxModelService.predictBullishProbability(anyDouble(), anyDouble(), anyDouble(), anyDouble(),
+                anyDouble(), anyDouble(), anyDouble(), anyDouble())).thenReturn(60.0); // ML only mildly bullish
+        when(onnxModelService.isModelLoaded()).thenReturn(true);
+        when(marketSnapshotRepository.count()).thenReturn(100L);
+        stubAgentConfidence(50.0);
+        stubCritic(50.0);
+        ReflectionTestUtils.setField(decisionAgent, "mlRescueEnabled", true);
+        ReflectionTestUtils.setField(decisionAgent, "mlRescueMinProbability", 0.75);
+
+        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
+
+        verifyEmit(never());
     }
 
     @Test

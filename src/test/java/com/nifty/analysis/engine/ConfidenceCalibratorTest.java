@@ -29,18 +29,19 @@ class ConfidenceCalibratorTest {
 
     @Test
     void breakEvenWinRate_fromRewardRisk() {
-        ConfidenceCalibrator c = new ConfidenceCalibrator(null, null);
-        ReflectionTestUtils.setField(c, "targetProfitPercent", 2.0);
-        ReflectionTestUtils.setField(c, "stopLossPercent", 40.0);
+        com.nifty.analysis.config.TradingPolicy policy = new com.nifty.analysis.config.TradingPolicy();
+        ConfidenceCalibrator c = new ConfidenceCalibrator(null, null, policy);
+        ReflectionTestUtils.setField(policy, "targetProfitPercent", 2.0);
+        ReflectionTestUtils.setField(policy, "stopLossPercent", 40.0);
         assertEquals(40.0 / 42.0, c.breakEvenWinRate(), 1e-6); // the "killer" ~95.2%
 
-        ReflectionTestUtils.setField(c, "stopLossPercent", 2.0);
+        ReflectionTestUtils.setField(policy, "stopLossPercent", 2.0);
         assertEquals(0.5, c.breakEvenWinRate(), 1e-6); // symmetric 1:1 R:R → 50%
     }
 
     @Test
     void probabilityOfWin_untrained_returnsSentinel() {
-        ConfidenceCalibrator c = new ConfidenceCalibrator(null, null);
+        ConfidenceCalibrator c = new ConfidenceCalibrator(null, null, new com.nifty.analysis.config.TradingPolicy());
         ReflectionTestUtils.setField(c, "enabled", true);
         assertEquals(-1.0, c.probabilityOfWin(80.0), 1e-9); // not trained → unknown
     }

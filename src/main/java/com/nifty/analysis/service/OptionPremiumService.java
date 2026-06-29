@@ -28,19 +28,21 @@ public class OptionPremiumService {
     private final RedisService redisService;
     private final BlackScholesService blackScholesService;
 
+    /** The strategy builder is NIFTY-only; reads must be instrument-scoped (the global Redis/DB
+     * "latest" is overwritten by other instruments' cycles, which would feed the wrong chain/spot). */
+    private static final String INSTRUMENT = "NIFTY";
+
     public OptionPremiumDto.Response latestPremiums() {
-        // Spot from the freshest market snapshot (Redis first, then DB).
-        double spot = redisService.getLatestMarketSnapshot()
-                .or(marketSnapshotRepository::findLatest)
+        // Spot from the freshest NIFTY market snapshot (instrument-scoped, not the global key).
+        double spot = marketSnapshotRepository.findLatestByInstrument(INSTRUMENT)
                 .map(MarketSnapshot::getNiftySpot)
                 .orElse(0.0);
 
-        // Latest option chain (Redis first, then DB).
-        List<OptionSnapshot> chain = redisService.getLatestOptionChain();
-        if (chain.isEmpty()) {
-            java.time.LocalDateTime latest = optionSnapshotRepository.findLatestSnapshotTime();
-            chain = latest != null ? optionSnapshotRepository.findBySnapshotTime(latest) : List.of();
-        }
+        // Latest NIFTY option chain (instrument-scoped).
+        java.time.LocalDateTime latest = optionSnapshotRepository.findLatestSnapshotTimeByInstrument(INSTRUMENT);
+        List<OptionSnapshot> chain = latest != null
+                ? optionSnapshotRepository.findByInstrumentAndSnapshotTime(INSTRUMENT, latest)
+                : List.of();
 
         // Fall back to a strike-derived spot if no market snapshot is available.
         if (spot <= 0 && !chain.isEmpty()) {

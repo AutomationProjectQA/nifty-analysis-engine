@@ -33,9 +33,6 @@ import java.util.Map;
 @Slf4j
 public class DecisionAgent {
 
-    @Value("${nifty.gating-threshold:80.0}")
-    private double gatingThreshold;
-
     // Weight given to the ONNX model when blending with the rule-based agent score
     // (0.0 = ignore the model entirely, 1.0 = use the model only).
     @Value("${nifty.model-weight:0.4}")
@@ -79,6 +76,14 @@ public class DecisionAgent {
     // instead of vetoing the multi-signal consensus.
     @Value("${nifty.signal.momentum-opposition-penalty:12.0}")
     private double momentumOppositionPenalty;
+
+    // Audit #206: let the ML model RESCUE a candidate the rule-score gate rejected, when the model's
+    // directional probability is strongly high. Overrides ONLY the confidence-score gate — the
+    // rescued candidate still must pass min-confirmation, calibration and per-strike guards.
+    @Value("${nifty.signal.ml-rescue-enabled:true}")
+    private boolean mlRescueEnabled;
+    @Value("${nifty.signal.ml-rescue-min-probability:0.75}")
+    private double mlRescueMinProbability;
 
     // --- P3-1: minimum-confirmation gate (evidence-based, not one collinear factor) ---
     @Value("${nifty.signal.min-confirmation-enabled:true}")
@@ -130,6 +135,8 @@ public class DecisionAgent {
     private final RiskGuardService riskGuardService;
     // Phase-3: emission (build/price/execute/persist/notify) is delegated to this service.
     private final com.nifty.analysis.service.SignalEmissionService signalEmissionService;
+    // Phase-3: centralized trading policy (gate threshold + reward:risk).
+    private final com.nifty.analysis.config.TradingPolicy tradingPolicy;
 
     /** Phase-0 observability accumulator for one evaluation pass (per-gate notes + outcome). */
     private static final class TraceCtx {
@@ -231,7 +238,7 @@ public class DecisionAgent {
 
         // 1.5 Market regime: rather than skipping SIDEWAYS markets outright (which kills a
         // lot of valid scalps), allow them but demand extra confidence via a stricter gate.
-        double effectiveGate = gatingThreshold;
+        double effectiveGate = tradingPolicy.getGatingThreshold();
         AgentResponse regimeResponse = marketRegimeAgent.analyze(instrument, latest.getSnapshotTime());
         if ("SIDEWAYS".equals(regimeResponse.bias())) {
             effectiveGate += sidewaysExtraGate;
@@ -368,11 +375,23 @@ public class DecisionAgent {
         trace.note("confidence", "final=" + finalConfidence + " (raw=" + rawConfidence
                 + ", entryPenalty=" + entryTimingPenalty + ", momentumPenalty=" + momentumPenalty + "), gate=" + effectiveGate);
 
-        // 5. Gating: Signal generated only if adjusted confidence >= the effective gate.
+        // 5. Gating: signal proceeds only if adjusted confidence >= the effective gate — UNLESS the
+        // ML model rescues it (audit #206: let ML recover a high-conviction opportunity the rule
+        // score discarded). A rescue overrides ONLY this scoring gate; the candidate still must pass
+        // every safety gate below (min-confirmation, calibration, per-strike liquidity/exposure).
         if (finalConfidence < effectiveGate) {
-            log.info("Signal confidence ({}%) below threshold ({}%). NO TRADE.", finalConfidence, effectiveGate);
-            reject(trace, "confidence_gate", "confidence " + finalConfidence + " < gate " + effectiveGate);
-            return;
+            boolean mlRescued = mlRescueEnabled && modelReady
+                    && (modelConfidence / 100.0) >= mlRescueMinProbability;
+            if (mlRescued) {
+                log.info("ML rescue: confidence {}% < gate {}% but ML probability {}% >= {} — proceeding to safety gates.",
+                        finalConfidence, effectiveGate, modelConfidence, mlRescueMinProbability);
+                trace.note("ml_rescue", "confidence " + finalConfidence + " < gate " + effectiveGate
+                        + " rescued by ML P=" + Math.round(modelConfidence * 100.0) / 100.0 + "%");
+            } else {
+                log.info("Signal confidence ({}%) below threshold ({}%). NO TRADE.", finalConfidence, effectiveGate);
+                reject(trace, "confidence_gate", "confidence " + finalConfidence + " < gate " + effectiveGate);
+                return;
+            }
         }
 
         // 5.5 P3-1 minimum-confirmation gate: a high blended score can come from one collinear

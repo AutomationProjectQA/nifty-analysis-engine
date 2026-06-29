@@ -94,16 +94,19 @@ R1 (over-gating) explains *no trades*. R2 (silent fallbacks) + R3 (no observabil
 **Goal:** make future change safe (kills R5/R6).
 - ✅ **DecisionAgent decomposed (the core SRP fix, audit #217/#224):** extracted `SignalEmissionService` — all emit/price/execute/persist/notify logic (the strike ladder, multi-leg, per-strike guards, order placement, signal+legs+explanation persistence, Telegram) moved out. `DecisionAgent` now only decides + traces and delegates via `signalEmissionService.emit(...)`. Removed ~8 emission-only deps + ~8 config fields from DecisionAgent. Logic moved verbatim (no behaviour change); tests migrated — gate tests stay in `DecisionAgentTest` (verify delegation), emission internals in new `SignalEmissionServiceTest`. 141 tests green.
 - ⛔ Further split (`ValidationPipeline` / `SignalFactory` / `ExecutionPipeline` / `NotificationPipeline`) — not done; the emission extraction is the highest-value cut. Do the rest against a deployed baseline.
-- ⛔ Centralize thresholds into one typed `TradingPolicy` config (#218/#219/#222) — not done (large test churn; lower impact now that the two classes are smaller).
+- 🔄 Centralize thresholds into one typed `TradingPolicy` config (#218/#219/#222) — STARTED: new `config/TradingPolicy` holds the cross-cutting, previously-DUPLICATED knobs (gating-threshold, target%, stop%) now read by `DecisionAgent`, `SignalEmissionService`, and `ConfidenceCalibrator` (target/stop were defined in all three). Remaining per-class tuning flags stay local; more knobs can migrate over time. 143 tests green.
 - ⛔ Separate domain model `Signal → Order → Position → TradeResult` (#220) — not done.
 - **Exit (partial):** DecisionAgent and SignalEmissionService are each independently unit-testable; the god-class is split. Remaining items are incremental.
 
-### Phase 4 — Adaptive AI 🟡
+### Phase 4 — Adaptive AI 🟡 — 🔄 STARTED (not deployed)
 **Goal:** move from rule-engine-with-ML toward an adaptive engine (audit Phase 18).
-- Calibration monitoring (predicted-vs-actual reliability curve) (audit #209; T18-2).
-- Replay harness: last-90-days replay, current vs candidate engine (audit #215; T18-4) — extend existing `BacktestingEngine`.
-- ML candidate re-scoring before final drop (audit #206; T18-1); later: drift detection, paper-mode exploration, feature-importance (audit #211/#212/#216).
-- **Exit:** changes can be A/B-replayed offline before deploy; confidence is calibrated.
+- ✅ **Calibration monitoring (audit #209; T18-2):** `CalibrationMonitorService` + `GET /api/v1/signals/calibration` — buckets resolved trades by the confidence the gate saw (`Final_Confidence`) and reports realised win-rate per band vs the calibrator's modelled probability ("does predicted 80% actually win ~80%?"). Read-only; never affects trading. Tested.
+- ✅ **Feature/factor-importance (#216; T18-6):** `FactorEffectivenessService` + `GET /api/v1/signals/factor-effectiveness` — avg factor score on wins vs losses ("edge") per factor, sorted; shows which confidence factors actually predict wins and which are noise to prune.
+- ✅ **Drift detection (#212; T18-6):** `DriftMonitorService` + `GET /api/v1/signals/drift` — recent-vs-historical win-rate + confidence shift with a `degraded` flag (recency by `TradeResult.id`).
+- ✅ **ML candidate re-scoring / rescue (#206; T18-1):** when a candidate is rejected at the confidence-SCORE gate, the ONNX model can RESCUE it if its directional probability ≥ `nifty.signal.ml-rescue-min-probability` (0.75). Default ON (`ml-rescue-enabled:true`). **Bounded:** overrides ONLY the scoring gate — the rescued candidate still must pass min-confirmation, calibration, and per-strike liquidity/exposure. Traced as `ml_rescue`. Tested both ways. **⚠️ This is the one gate-flow change that affects trade generation — watch `/decision-funnel` for `ml_rescue` notes after deploy and tune the threshold from win-rate.**
+- ✅ **Replay harness (#215; T18-4):** `ReplayHarnessService` + `GET /api/v1/signals/replay-compare?start&end&candidateGate` — NON-persisting (unlike `BacktestingEngine`, which writes to live tables) A/B of the live policy vs a candidate gating threshold over a historical window. Reuses `BacktestingEngine.computeMetrics`. Structurally can't persist (no signal/result repos injected). Tested.
+- ⛔ Paper-mode exploration (#211) — NOT done (ε-greedy sampling touches the decision path; compounds with ML-rescue — do after watching live).
+- **Exit (mostly met):** engine fully observable + ML rescues + safe A/B replay available. Use the harness to validate the remaining gate-flow tuning.
 
 ### Cross-cutting — Prevent recurrence (start in Phase 0, sustain)
 - **No silent fallbacks rule:** any fallback must set a `degraded` flag surfaced to UI + logs + a metric. Add a test that asserts simulated paths flag themselves.

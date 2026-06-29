@@ -61,9 +61,12 @@ public class MarketController {
     }
 
     @GetMapping("/market/latest")
-    public ResponseEntity<MarketSnapshot> getLatestMarket() {
-        return redisService.getLatestMarketSnapshot()
-                .or(marketSnapshotRepository::findLatest)
+    public ResponseEntity<MarketSnapshot> getLatestMarket(
+            @RequestParam(value = "instrument", defaultValue = "NIFTY") String instrument) {
+        // MUST be instrument-scoped: the global "latest" / Redis key is overwritten by whichever
+        // instrument's cycle ran last (e.g. BANKNIFTY), so an unscoped read returns the wrong
+        // instrument's row to the Nifty dashboard. Query the latest row for THIS instrument.
+        return marketSnapshotRepository.findLatestByInstrument(instrument)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
@@ -108,18 +111,14 @@ public class MarketController {
     }
 
     @GetMapping("/options/latest")
-    public ResponseEntity<List<OptionSnapshot>> getLatestOptions() {
-        List<OptionSnapshot> cached = redisService.getLatestOptionChain();
-        if (!cached.isEmpty()) {
-            return ResponseEntity.ok(cached);
-        }
-
-        LocalDateTime latestTime = optionSnapshotRepository.findLatestSnapshotTime();
+    public ResponseEntity<List<OptionSnapshot>> getLatestOptions(
+            @RequestParam(value = "instrument", defaultValue = "NIFTY") String instrument) {
+        // Instrument-scoped (same reason as /market/latest): the global option-chain cache/query is
+        // not instrument-aware and can return another instrument's chain.
+        LocalDateTime latestTime = optionSnapshotRepository.findLatestSnapshotTimeByInstrument(instrument);
         if (latestTime != null) {
-            List<OptionSnapshot> dbList = optionSnapshotRepository.findBySnapshotTime(latestTime);
-            return ResponseEntity.ok(dbList);
+            return ResponseEntity.ok(optionSnapshotRepository.findByInstrumentAndSnapshotTime(instrument, latestTime));
         }
-
         return ResponseEntity.notFound().build();
     }
 }

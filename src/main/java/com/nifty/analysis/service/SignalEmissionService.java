@@ -38,15 +38,6 @@ import java.util.Map;
 @Slf4j
 public class SignalEmissionService {
 
-    @Value("${nifty.gating-threshold:80.0}")
-    private double gatingThreshold;
-
-    @Value("${nifty.risk.target-profit-percent:2.0}")
-    private double targetProfitPercent;
-
-    @Value("${nifty.risk.stop-loss-percent:40.0}")
-    private double stopLossPercent;
-
     @Value("${nifty.signal.strike-ladder-enabled:true}")
     private boolean strikeLadderEnabled;
 
@@ -70,6 +61,7 @@ public class SignalEmissionService {
     private final TelegramBotService telegramBotService;
     private final OrderExecutionService orderExecutionService;
     private final OptionPricingService optionPricingService;
+    private final com.nifty.analysis.config.TradingPolicy tradingPolicy;
 
     /** Outcome of an emission pass: whether it was multi-leg, and how many signals were emitted. */
     public record EmissionResult(boolean multiLeg, int emitted, int candidates) {}
@@ -229,9 +221,9 @@ public class SignalEmissionService {
             entry = 150.0; // fallback when live LTP is unavailable (simulation / no broker session)
             log.info("Live option LTP unavailable for {} {}. Using fallback entry premium {}.", signalType, strike, entry);
         }
-        double target1 = round2(entry * (1.0 + targetProfitPercent / 200.0));
-        double target2 = round2(entry * (1.0 + targetProfitPercent / 100.0));
-        double stopLoss = round2(entry * (1.0 - stopLossPercent / 100.0));
+        double target1 = round2(entry * (1.0 + tradingPolicy.getTargetProfitPercent() / 200.0));
+        double target2 = round2(entry * (1.0 + tradingPolicy.getTargetProfitPercent() / 100.0));
+        double stopLoss = round2(entry * (1.0 - tradingPolicy.getStopLossPercent() / 100.0));
         int quantity = orderExecutionService.calculateQuantity(entry, splitAcross, spec.lotSize());
 
         // Risk assessment (advisory): evaluate R:R + volatility risk. Surfaced/logged for
@@ -281,7 +273,7 @@ public class SignalEmissionService {
                         ? String.format("Blend: %.2f*ONNX + %.2f*Agent", modelWeight, 1.0 - modelWeight)
                         : "Agent-only (ONNX not ready)"));
         explanations.add(explanation("Final_Confidence", round2(finalConfidence),
-                String.format("After critic penalties; gating threshold = %.1f%%", gatingThreshold)));
+                String.format("After critic penalties; gating threshold = %.1f%%", tradingPolicy.getGatingThreshold())));
         explanations.add(explanation("Liquidity", round2(liquidity.score()),
                 "Strike liquidity score (" + strikeClass(strike, spotPrice, isBullish, spec.strikeStep()) + ")"));
         explanations.add(explanation("Risk_RR", round2(risk.score()),

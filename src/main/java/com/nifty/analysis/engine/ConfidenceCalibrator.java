@@ -34,15 +34,12 @@ public class ConfidenceCalibrator {
 
     private final TradeResultRepository tradeResultRepository;
     private final SignalExplanationRepository signalExplanationRepository;
+    private final com.nifty.analysis.config.TradingPolicy tradingPolicy;
 
     @Value("${nifty.calibration.enabled:true}")
     private boolean enabled;
     @Value("${nifty.calibration.min-samples:30}")
     private int minSamples;
-    @Value("${nifty.risk.target-profit-percent:2.0}")
-    private double targetProfitPercent;
-    @Value("${nifty.risk.stop-loss-percent:40.0}")
-    private double stopLossPercent;
 
     /** The factor row whose score equals the value the gate compares (critic-adjusted confidence). */
     private static final String CALIBRATION_FACTOR = "Final_Confidence";
@@ -77,8 +74,10 @@ public class ConfidenceCalibrator {
      * With target {@code t}% and stop {@code s}% of premium, break-even p = s / (s + t).
      */
     public double breakEvenWinRate() {
-        double denom = stopLossPercent + targetProfitPercent;
-        return denom <= 0 ? 0.5 : stopLossPercent / denom;
+        double stop = tradingPolicy.getStopLossPercent();
+        double target = tradingPolicy.getTargetProfitPercent();
+        double denom = stop + target;
+        return denom <= 0 ? 0.5 : stop / denom;
     }
 
     /** Refit nightly from all resolved trades. Also safe to trigger manually. */

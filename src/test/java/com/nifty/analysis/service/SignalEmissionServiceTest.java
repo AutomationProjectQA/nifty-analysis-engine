@@ -43,6 +43,7 @@ class SignalEmissionServiceTest {
     @Mock private TelegramBotService telegramBotService;
     @Mock private OrderExecutionService orderExecutionService;
     @Mock private OptionPricingService optionPricingService;
+    @org.mockito.Spy private com.nifty.analysis.config.TradingPolicy tradingPolicy = new com.nifty.analysis.config.TradingPolicy();
 
     @InjectMocks
     private SignalEmissionService service;
@@ -51,9 +52,9 @@ class SignalEmissionServiceTest {
 
     @BeforeEach
     void setUp() {
-        ReflectionTestUtils.setField(service, "gatingThreshold", 60.0);
-        ReflectionTestUtils.setField(service, "targetProfitPercent", 2.0);
-        ReflectionTestUtils.setField(service, "stopLossPercent", 40.0);
+        ReflectionTestUtils.setField(tradingPolicy, "gatingThreshold", 60.0);
+        ReflectionTestUtils.setField(tradingPolicy, "targetProfitPercent", 2.0);
+        ReflectionTestUtils.setField(tradingPolicy, "stopLossPercent", 40.0);
         ReflectionTestUtils.setField(service, "strikeLadderEnabled", false); // single ATM strike
         ReflectionTestUtils.setField(service, "minLiquidityScore", 70.0);
         ReflectionTestUtils.setField(service, "maxConcurrentPositions", 6);
