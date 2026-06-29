@@ -39,12 +39,12 @@ class RiskGuardServiceTest {
         ReflectionTestUtils.setField(riskGuardService, "provider", "angelone");
         ReflectionTestUtils.setField(riskGuardService, "blockOnSimulatedData", true);
         // Live data by default so the existing limit tests behave normally.
-        lenient().when(dataFeedStatus.isLive()).thenReturn(true);
+        lenient().when(dataFeedStatus.isLive("NIFTY")).thenReturn(true);
     }
 
     @Test
     void simulatedData_blocksNewTrade() {
-        when(dataFeedStatus.isLive()).thenReturn(false);
+        when(dataFeedStatus.isLive("NIFTY")).thenReturn(false);
         RiskGuardService.RiskCheck check = riskGuardService.canOpenNewTrade();
         assertFalse(check.allowed());
         assertTrue(check.reason().toLowerCase().contains("simulated"));
@@ -52,7 +52,7 @@ class RiskGuardServiceTest {
 
     @Test
     void liveData_doesNotBlockOnDataSource() {
-        when(dataFeedStatus.isLive()).thenReturn(true);
+        when(dataFeedStatus.isLive("NIFTY")).thenReturn(true);
         when(tradeSignalRepository.findBySignalTimeAfter(any())).thenReturn(new ArrayList<>());
         RiskGuardService.RiskCheck check = riskGuardService.canOpenNewTrade();
         assertTrue(check.allowed());

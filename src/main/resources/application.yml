@@ -106,6 +106,12 @@ nifty:
   instruments:
     banknifty-enabled: true
 
+  # P5-1: regime-aware DEFINED-RISK strategies (credit/debit spreads + iron condor for range/high-IV).
+  # OFF until the multi-leg execution + resolution lifecycle is wired; when off the engine uses the
+  # existing single-leg long options only.
+  strategy:
+    spreads-enabled: false
+
   # P4-1: calibrate confidence points into a measured P(win) and gate on break-even + margin.
   calibration:
     enabled: true

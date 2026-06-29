@@ -46,6 +46,8 @@ class MarketCollectorServiceTest {
     @Mock
     private MarketCandleRepository marketCandleRepository;
     @Mock
+    private com.nifty.analysis.repository.TradeLegRepository tradeLegRepository;
+    @Mock
     private com.nifty.analysis.instrument.InstrumentRegistry instrumentRegistry;
     @Mock
     private TradeSignalRepository tradeSignalRepository;
@@ -89,6 +91,7 @@ class MarketCollectorServiceTest {
                 marketSnapshotRepository,
                 optionSnapshotRepository,
                 marketCandleRepository,
+                tradeLegRepository,
                 instrumentRegistry,
                 tradeSignalRepository,
                 tradeResultRepository,

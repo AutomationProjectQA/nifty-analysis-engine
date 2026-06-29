@@ -55,16 +55,20 @@ public class RiskGuardService {
      * daily risk limits.
      */
     public RiskCheck canOpenNewTrade() {
+        return canOpenNewTrade("NIFTY");
+    }
+
+    public RiskCheck canOpenNewTrade(String instrument) {
         if (!tradingEnabled) {
             return RiskCheck.deny("Trading is disabled (kill switch nifty.risk.trading-enabled=false).");
         }
 
-        // Never trade on simulated/degraded data in live (angelone) mode. This only
-        // blocks when the feed has actually fallen back to simulation — when live data
-        // is flowing, dataFeedStatus.isLive() is true and trading proceeds normally.
-        if (blockOnSimulatedData && "angelone".equalsIgnoreCase(provider) && !dataFeedStatus.isLive()) {
-            return RiskCheck.deny("Market data is simulated/degraded (live broker feed unavailable). "
-                    + "Refusing to open new trades on fabricated prices.");
+        // Never trade on simulated/degraded data in live (angelone) mode — checked PER INSTRUMENT,
+        // so a Bank Nifty fallback doesn't block Nifty (and vice-versa). When this instrument's live
+        // data is flowing, dataFeedStatus.isLive(instrument) is true and trading proceeds normally.
+        if (blockOnSimulatedData && "angelone".equalsIgnoreCase(provider) && !dataFeedStatus.isLive(instrument)) {
+            return RiskCheck.deny("Market data for " + instrument + " is simulated/degraded (live broker feed "
+                    + "unavailable). Refusing to open new trades on fabricated prices.");
         }
 
         LocalDateTime startOfDay = ZonedDateTime.now(ZoneId.of("Asia/Kolkata"))

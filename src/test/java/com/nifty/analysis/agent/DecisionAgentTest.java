@@ -55,6 +55,8 @@ class DecisionAgentTest {
     @Mock private MultiTimeframeAgent multiTimeframeAgent;
     @Mock private com.nifty.analysis.engine.ConfidenceCalibrator calibrator;
     @Mock private com.nifty.analysis.instrument.InstrumentRegistry instrumentRegistry;
+    @Mock private com.nifty.analysis.strategy.RegimeStrategySelector strategySelector;
+    @Mock private com.nifty.analysis.repository.TradeLegRepository tradeLegRepository;
     @Mock private MarketSnapshotRepository marketSnapshotRepository;
     @Mock private TradeSignalRepository tradeSignalRepository;
     @Mock private SignalExplanationRepository signalExplanationRepository;
@@ -92,9 +94,12 @@ class DecisionAgentTest {
         // Instrument registry: resolve NIFTY spec (step 50, lot 65) for every evaluation.
         lenient().when(instrumentRegistry.get("NIFTY"))
                 .thenReturn(new com.nifty.analysis.instrument.InstrumentSpec("NIFTY", 50, 65, true));
+        // Strategy selector → single-leg long by default (spreads disabled), so these tests use the ladder.
+        lenient().when(strategySelector.select(anyString(), anyBoolean()))
+                .thenReturn(com.nifty.analysis.strategy.StrategyType.LONG_CALL);
 
         // Risk guard allows trading by default; one test overrides this.
-        lenient().when(riskGuardService.canOpenNewTrade())
+        lenient().when(riskGuardService.canOpenNewTrade(anyString()))
                 .thenReturn(RiskGuardService.RiskCheck.allow());
         // Pricing stubs used only by the signal-generating tests.
         lenient().when(optionPricingService.getOptionLtp(anyString(), anyInt())).thenReturn(150.0);
@@ -167,7 +172,7 @@ class DecisionAgentTest {
 
     @Test
     void riskGuardBlocks_skipsEvaluationEntirely() {
-        when(riskGuardService.canOpenNewTrade())
+        when(riskGuardService.canOpenNewTrade(anyString()))
                 .thenReturn(RiskGuardService.RiskCheck.deny("Max trades per day reached (5/5)."));
 
         decisionAgent.evaluateMarketForSignals(latest, 23490.0);
@@ -342,6 +347,29 @@ class DecisionAgentTest {
         ArgumentCaptor<Double> rawConfidence = ArgumentCaptor.forClass(Double.class);
         verify(criticAgent).evaluateAndApplyPenalties(rawConfidence.capture(), eq(latest), anyList(), eq(true));
         assertEquals(60.0, rawConfidence.getValue(), 0.001);
+    }
+
+    // --- P5-1: multi-leg defined-risk strategy ---
+
+    @Test
+    void multiLegStrategy_emitsIronCondorWithLegs() {
+        stubUpToConfidence();
+        when(onnxModelService.isModelLoaded()).thenReturn(true);
+        when(marketSnapshotRepository.count()).thenReturn(100L);
+        stubAgentConfidence(80.0);
+        stubCritic(80.0);
+        // Selector routes to a multi-leg defined-risk strategy → the ladder is replaced.
+        when(strategySelector.select(anyString(), anyBoolean()))
+                .thenReturn(com.nifty.analysis.strategy.StrategyType.IRON_CONDOR);
+        when(llmService.generateTradeExplanation(anyString(), anyInt(), anyDouble(), anyMap(), anyString()))
+                .thenReturn("thesis");
+
+        decisionAgent.evaluateMarketForSignals(latest, 23490.0);
+
+        ArgumentCaptor<TradeSignal> saved = ArgumentCaptor.forClass(TradeSignal.class);
+        verify(tradeSignalRepository, atLeastOnce()).save(saved.capture());
+        assertEquals("IRON_CONDOR", saved.getValue().getStrategy());
+        verify(tradeLegRepository).saveAll(any()); // the 4 condor legs persisted
     }
 
     // --- P3-1: minimum-confirmation gate ---

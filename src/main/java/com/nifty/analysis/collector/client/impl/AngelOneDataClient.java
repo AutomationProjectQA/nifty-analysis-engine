@@ -201,12 +201,12 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient,
         // resolved + validated on the VM. NIFTY behaviour below is unchanged.
         if (!"NIFTY".equals(instrument)) {
             log.warn("Live Angel One fetch not yet wired for {}. Returning SIMULATED fallback (won't trade live).", instrument);
-            return getSimulatedFallbackMarketData();
+            return getSimulatedFallbackMarketData(instrument);
         }
 
         // If credentials are simulated, return simulated data
         if ("SIMULATED_JWT_TOKEN".equals(jwtToken)) {
-            return getSimulatedFallbackMarketData();
+            return getSimulatedFallbackMarketData(instrument);
         }
 
         try {
@@ -288,13 +288,13 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient,
                     }
                 }
 
-                dataFeedStatus.update(true); // real live market data
+                dataFeedStatus.update("NIFTY", true); // real live market data
                 return new MarketSnapshotDto(spot, futures, vix, volume, com.nifty.analysis.util.TimeUtil.nowIst());
             }
         } catch (Exception e) {
             log.error("Failed to fetch market data from Angel One API. Using simulated fallback.", e);
         }
-        return getSimulatedFallbackMarketData();
+        return getSimulatedFallbackMarketData("NIFTY");
     }
 
     /**
@@ -632,8 +632,8 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient,
         }
     }
 
-    private MarketSnapshotDto getSimulatedFallbackMarketData() {
-        dataFeedStatus.update(false); // degraded — every caller of this is on simulated data
+    private MarketSnapshotDto getSimulatedFallbackMarketData(String instrument) {
+        dataFeedStatus.update(instrument, false); // this instrument is on simulated data
         double spot = 23500.0 + (new Random().nextDouble() - 0.5) * 10.0;
         return new MarketSnapshotDto(spot, spot + 30.0, 13.5, 500000.0, com.nifty.analysis.util.TimeUtil.nowIst());
     }

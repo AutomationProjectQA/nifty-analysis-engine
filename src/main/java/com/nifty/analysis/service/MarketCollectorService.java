@@ -37,6 +37,7 @@ public class MarketCollectorService {
     private final MarketSnapshotRepository marketSnapshotRepository;
     private final OptionSnapshotRepository optionSnapshotRepository;
     private final MarketCandleRepository marketCandleRepository;
+    private final com.nifty.analysis.repository.TradeLegRepository tradeLegRepository;
     private final com.nifty.analysis.instrument.InstrumentRegistry instrumentRegistry;
     private final TradeSignalRepository tradeSignalRepository;
     private final TradeResultRepository tradeResultRepository;
@@ -335,6 +336,11 @@ public class MarketCollectorService {
 
         double spot = latest.getNiftySpot();
         for (TradeSignal signal : activeSignals) {
+            // P5-1: multi-leg (spread / iron condor) signals resolve on combined NET P&L from their legs.
+            if (signal.getStrategy() != null) {
+                resolveMultiLeg(signal, latest, theoByStrike);
+                continue;
+            }
             // Prefer the entry spot stored on the signal; reconstruct only for legacy rows.
             double entrySpot = signal.getEntrySpot() != null ? signal.getEntrySpot()
                     : marketSnapshotRepository.findLatestBefore(signal.getSignalTime())
@@ -467,6 +473,69 @@ public class MarketCollectorService {
                 log.info("Active trade resolved: Target 2 hit for signal ID={}", signal.getId());
             }
         }
+    }
+
+    /**
+     * P5-1: resolve a multi-leg (spread / iron condor) signal on its combined NET P&L. Each leg is
+     * priced (live LTP → theoretical fallback); P&L = Σ sign·(current − entry)·qty. Resolves at the
+     * INR take-profit (target2), the INR defined-risk cap (stopLoss), or expiry. If any leg can't be
+     * priced, leaves it ACTIVE rather than resolving on a partial position.
+     */
+    private void resolveMultiLeg(TradeSignal signal, MarketSnapshot latest,
+            java.util.Map<Integer, com.nifty.analysis.dto.OptionPremiumDto.StrikePremium> theoByStrike) {
+        List<com.nifty.analysis.entity.TradeLeg> legs = tradeLegRepository.findBySignalId(signal.getId());
+        if (legs.isEmpty()) {
+            return;
+        }
+        double netPnl = 0.0;
+        for (com.nifty.analysis.entity.TradeLeg leg : legs) {
+            boolean call = "CE".equals(leg.getOptionType());
+            double cur = optionPricingService.getOptionLtp(call ? "BUY_CE" : "BUY_PE", leg.getStrike());
+            if (cur <= 0) {
+                com.nifty.analysis.dto.OptionPremiumDto.StrikePremium theo = theoByStrike.get(leg.getStrike());
+                cur = theo != null ? (call ? theo.cePremium() : theo.pePremium()) : -1;
+            }
+            if (cur <= 0) {
+                log.warn("No premium for leg {} {} of multi-leg signal {} — leaving ACTIVE.",
+                        leg.getOptionType(), leg.getStrike(), signal.getId());
+                return;
+            }
+            netPnl += leg.sign() * (cur - leg.getEntryPremium()) * leg.getQuantity();
+        }
+        netPnl = Math.round(netPnl * 100.0) / 100.0;
+
+        double target = signal.getTarget2() != null ? signal.getTarget2() : Double.MAX_VALUE;   // INR take-profit
+        double stopCap = signal.getStopLoss() != null ? signal.getStopLoss() : Double.MAX_VALUE; // INR max-loss cap
+
+        String outcome;
+        if (isPastExpiry(signal.getSignalTime())) {
+            outcome = "EXPIRED";
+        } else if (netPnl >= target) {
+            outcome = "TARGET2";
+        } else if (netPnl <= -stopCap) {
+            outcome = "STOP_LOSS";
+        } else {
+            return; // still open
+        }
+
+        signal.setStatus("EXPIRED".equals(outcome) ? "EXPIRED" : ("STOP_LOSS".equals(outcome) ? "FAILED" : "COMPLETED"));
+        tradeSignalRepository.save(signal);
+
+        TradeResult result = new TradeResult();
+        result.setSignal(signal);
+        result.setOutcome(outcome);
+        result.setProfitLoss(netPnl);
+        result.setHoldingTime(java.time.Duration.between(signal.getSignalTime(), latest.getSnapshotTime()).toSeconds());
+        result.setAccuracy(netPnl >= 0 ? 100.0 : 0.0);
+        tradeResultRepository.save(result);
+        confidenceWeightTuner.reinforce(signal, netPnl >= 0);
+
+        telegramBotService.sendMessage(String.format(
+                "%s *MULTI-LEG RESOLVED: %s*%n%n*%s %s* (Strike %d, %d legs)%n*Net P&L:* %.2f INR",
+                netPnl >= 0 ? "✅" : "🚨", outcome, signal.getInstrument(), signal.getStrategy(),
+                signal.getStrike(), legs.size(), netPnl));
+        log.info("Multi-leg {} {} resolved {} for signal {} (net {} INR).",
+                signal.getInstrument(), signal.getStrategy(), outcome, signal.getId(), netPnl);
     }
 
     @Transactional(readOnly = true)

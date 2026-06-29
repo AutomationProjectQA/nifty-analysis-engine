@@ -29,6 +29,10 @@ public class TradeSignal {
     @Column(name = "signal_type", nullable = false, length = 10)
     private String signalType; // "BUY_CE", "BUY_PE"
 
+    // P5-1: strategy type (LONG_CALL, BULL_CALL_SPREAD, IRON_CONDOR, ...). Null = legacy single-leg long.
+    @Column(name = "strategy", length = 30)
+    private String strategy;
+
     @Column(name = "strike", nullable = false)
     private Integer strike;
 
