@@ -29,9 +29,18 @@ public class HealthController {
     private final MarketSnapshotRepository marketSnapshotRepository;
     private final OnnxModelService onnxModelService;
     private final RedisConnectionFactory redisConnectionFactory;
+    private final com.nifty.analysis.service.DataHealthService dataHealthService;
 
     @Value("${nifty.risk.trading-enabled:true}")
     private boolean tradingEnabled;
+
+    /** Aggregated data-health verdict: is the data real, fresh, sane, and trading? */
+    @GetMapping("/data")
+    public ResponseEntity<com.nifty.analysis.service.DataHealthService.Report> dataHealth() {
+        com.nifty.analysis.service.DataHealthService.Report r = dataHealthService.report();
+        // 200 when healthy, 503 when degraded — so uptime monitors can alert on it directly.
+        return ResponseEntity.status("HEALTHY".equals(r.status()) ? 200 : 503).body(r);
+    }
 
     @GetMapping
     public ResponseEntity<Map<String, Object>> health() {

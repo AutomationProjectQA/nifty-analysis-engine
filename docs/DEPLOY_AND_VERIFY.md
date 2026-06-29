@@ -5,6 +5,10 @@
 
 ---
 
+## 0. Pre-merge (CI — automatic)
+- [ ] GitHub Actions (`.github/workflows/ci.yml`) runs on every PR/push: **backend `mvn test`** + **frontend `vite build`** (+ advisory lint). A PR that breaks compile/tests/build is caught here — broken code can't reach deploy.
+- [ ] Recommended per engine-PR: run **`/code-review ultra`** manually (it's user-triggered/billed, so CI can't run it for you) for a deep multi-agent review before merge.
+
 ## 1. Pre-deploy
 - [ ] On branch `fix/production-data-chain`, build is green: `mvn -q test` (151 tests) and `cd frontend && npx vite build`.
 - [ ] **Env on the VM** (these silently degrade if missing — the new `StartupHealthLogger` will WARN about them at boot):
@@ -17,6 +21,11 @@
 - [ ] Deploy backend (systemd service) — see `vm-deployment-setup` notes.
 - [ ] Deploy frontend (`frontend/dist` from a **production** build → `VITE_API_BASE_URL` empty = same origin via nginx).
 - [ ] Backend started cleanly — check logs for the `=== Startup health ===` block; no migration failures.
+
+## 2b. Automated guards (run these instead of eyeballing pages)
+- [ ] **Smoke test:** `./smoke-test.sh https://<DOMAIN>` — asserts health, `/market/latest` is NIFTY + sane spot (and catches the `23510.50` mock tell), feed source, option-chain LTP. Exit 0 = safe. Run after every deploy.
+- [ ] **Data-health verdict:** `GET /api/v1/health/data` → `{"status":"HEALTHY"|"DEGRADED","problems":[...]}` (503 when degraded, so uptime monitors alert). This is the one-call answer to "is everything real?".
+- [ ] **Auto-alerts:** the backend Telegrams you when data goes DEGRADED in market hours (`nifty.health.alert-enabled`). Confirm you receive the bot messages.
 
 ## 3. Connection + feed sanity (30 seconds)
 - [ ] `https://<DOMAIN>/api/v1/market/feed-status` → returns JSON (proves frontend-origin → backend reachable).

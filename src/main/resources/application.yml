@@ -154,6 +154,16 @@ nifty:
     # Phase-1 RC-S1: continuous (ramped) factor scoring instead of coarse 0/50/100 buckets, so
     # confidence is stable near the gate. Set false to A/B against the old bucketed behaviour.
     continuous-scoring: true
+
+  # Automated data-health monitoring: /api/v1/health/data aggregates feed/freshness/spot-sanity/
+  # gemini/no-trades into one verdict; a scheduled job Telegrams when it goes DEGRADED in market
+  # hours (so critical issues page you instead of being found by manual checking).
+  health:
+    spot-min: 15000        # NIFTY spot below this = almost certainly simulated/misparsed
+    spot-max: 50000        # NIFTY spot above this = misparsed
+    max-stale-seconds: 300 # snapshot/option-chain older than this during market hours = stale
+    alert-enabled: true
+    alert-interval-ms: 300000  # poll/alert cadence (5 min)
     # P3-2: Trend, MultiTimeframe and VWAP are collinear (all measure trend). When true, they are
     # collapsed into ONE group so trend is counted once, not ~3x (which inflated every score).
     decollinearize-trend: true
