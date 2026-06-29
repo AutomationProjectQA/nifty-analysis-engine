@@ -34,6 +34,11 @@ public class ConfidenceEngine {
     @Value("${nifty.confidence.decollinearize-trend:true}")
     private boolean decollinearizeTrend;
 
+    // Phase-1 RC-S1: use continuous (ramped) factor scores instead of coarse 0/50/100 buckets, so
+    // confidence is stable and a borderline setup doesn't flip TRADE↔NO-TRADE on a 1-pt move.
+    @Value("${nifty.confidence.continuous-scoring:true}")
+    private boolean continuousScoring;
+
     private final ConfidenceWeightRepository confidenceWeightRepository;
 
     private final MarketRegimeAgent marketRegimeAgent;
@@ -82,30 +87,15 @@ public class ConfidenceEngine {
         double trendScore = isCall ? trendScoreVal : 100.0 - trendScoreVal;
 
         Double rsi = latest.getRsi();
-        double rsiScore;
-        if (isCall) {
-            rsiScore = rsi != null && rsi >= 55.0 && rsi <= 68.0 ? 100.0
-                    : (rsi != null && rsi >= 45.0 && rsi < 55.0 ? 50.0 : 0.0);
-        } else {
-            rsiScore = rsi != null && rsi <= 40.0 ? 100.0
-                    : (rsi != null && rsi > 40.0 && rsi <= 55.0 ? 50.0 : 0.0);
-        }
+        double rsiScore = continuousScoring ? rsiScoreContinuous(rsi, isCall) : rsiScoreBucketed(rsi, isCall);
 
-        double vwapScore;
-        if (isCall) {
-            vwapScore = latest.getVwap() != null && latest.getNiftySpot() > latest.getVwap() ? 100.0 : 0.0;
-        } else {
-            vwapScore = latest.getVwap() != null && latest.getNiftySpot() < latest.getVwap() ? 100.0 : 0.0;
-        }
+        double vwapScore = continuousScoring
+                ? vwapScoreContinuous(latest.getNiftySpot(), latest.getVwap(), isCall)
+                : vwapScoreBucketed(latest.getNiftySpot(), latest.getVwap(), isCall);
 
         AgentResponse optionsAgentResponse = optionsAgent.analyze(optionChain, latest.getNiftySpot(), spotChange);
         double overallPcr = optionsIndicatorService.calculateOverallPcr(optionChain);
-        double pcrScore;
-        if (isCall) {
-            pcrScore = overallPcr >= 1.1 ? 100.0 : (overallPcr >= 0.8 ? 50.0 : 0.0);
-        } else {
-            pcrScore = overallPcr <= 0.7 ? 100.0 : (overallPcr < 1.0 ? 50.0 : 0.0);
-        }
+        double pcrScore = continuousScoring ? pcrScoreContinuous(overallPcr, isCall) : pcrScoreBucketed(overallPcr, isCall);
 
         double oiScore = isCall ? optionsAgentResponse.score() : 100.0 - optionsAgentResponse.score(); // OI build-up score
 
@@ -113,7 +103,9 @@ public class ConfidenceEngine {
         // expiry), not against fixed absolute points — a +30 basis means rich at 1 DTE, cheap at 7 DTE.
         double futurePremium = latest.getNiftyFuture() - latest.getNiftySpot();
         long dte = com.nifty.analysis.util.TimeUtil.daysToWeeklyExpiry(latest.getSnapshotTime().toLocalDate());
-        double futuresScore = futuresBasisScore(futurePremium, latest.getNiftySpot(), dte, isCall);
+        double futuresScore = continuousScoring
+                ? futuresBasisScoreContinuous(futurePremium, latest.getNiftySpot(), dte, isCall)
+                : futuresBasisScore(futurePremium, latest.getNiftySpot(), dte, isCall);
 
         double sentimentScore = isCall ? sentimentAgent.analyze().score() : 100.0 - sentimentAgent.analyze().score();
 
@@ -163,6 +155,73 @@ public class ConfidenceEngine {
             if (premium <= fair + band) return 50.0;
             return 0.0;
         }
+    }
+
+    // ---- Continuous (ramped) factor scores (Phase-1 RC-S1) ----
+
+    private static double clamp(double v) { return Math.max(0.0, Math.min(100.0, v)); }
+
+    /** Linear ramp: 0 at {@code lo}, 100 at {@code hi} (handles hi<lo for descending ramps). */
+    private static double ramp(double x, double lo, double hi) {
+        if (hi == lo) return x >= hi ? 100.0 : 0.0;
+        return clamp((x - lo) / (hi - lo) * 100.0);
+    }
+
+    /**
+     * RSI score, continuous and monotonic up to the overbought zone. Strong-but-not-extreme momentum
+     * (RSI ~70) is NOT scored 0 anymore (Phase-1 AG-F15) — it tapers only past ~78.
+     */
+    static double rsiScoreContinuous(Double rsi, boolean isCall) {
+        if (rsi == null) return 50.0;
+        if (isCall) {
+            if (rsi <= 72.0) return ramp(rsi, 40.0, 60.0);     // 40→0, 60+→100
+            return clamp(100.0 - ramp(rsi, 78.0, 90.0) * 0.4); // mild overbought taper toward 60
+        } else {
+            if (rsi >= 28.0) return ramp(rsi, 60.0, 40.0);     // 60→0, 40-→100 (descending)
+            return clamp(100.0 - ramp(rsi, 22.0, 10.0) * 0.4); // mild oversold taper toward 60
+        }
+    }
+
+    /** VWAP score by signed distance as a fraction of spot (±0.3% spans the full 0..100 ramp). */
+    static double vwapScoreContinuous(double spot, Double vwap, boolean isCall) {
+        if (vwap == null || vwap == 0.0) return 50.0;
+        double dist = (spot - vwap) / vwap; // + above VWAP (bullish), − below
+        double signed = isCall ? dist : -dist;
+        return clamp(50.0 + (signed / 0.003) * 50.0);
+    }
+
+    /** PCR score, continuous: bullish rises with PCR (0.7→1.1 spans 0..100); bearish mirrors. */
+    static double pcrScoreContinuous(double pcr, boolean isCall) {
+        return isCall ? ramp(pcr, 0.7, 1.1) : ramp(pcr, 1.1, 0.7);
+    }
+
+    /** Continuous futures-basis score: ramps across the fair±band window instead of 0/50/100. */
+    static double futuresBasisScoreContinuous(double premium, double spot, double daysToExpiry, boolean isCall) {
+        double fair = spot * RISK_FREE_RATE * Math.max(daysToExpiry, 0.5) / 365.0;
+        double band = Math.max(8.0, fair * 0.5);
+        return isCall ? ramp(premium, fair - band, fair + band)
+                      : ramp(premium, fair + band, fair - band);
+    }
+
+    // ---- Legacy bucketed scores (kept for A/B via nifty.confidence.continuous-scoring=false) ----
+
+    static double rsiScoreBucketed(Double rsi, boolean isCall) {
+        if (isCall) {
+            return rsi != null && rsi >= 55.0 && rsi <= 68.0 ? 100.0
+                    : (rsi != null && rsi >= 45.0 && rsi < 55.0 ? 50.0 : 0.0);
+        }
+        return rsi != null && rsi <= 40.0 ? 100.0
+                : (rsi != null && rsi > 40.0 && rsi <= 55.0 ? 50.0 : 0.0);
+    }
+
+    static double vwapScoreBucketed(double spot, Double vwap, boolean isCall) {
+        if (isCall) return vwap != null && spot > vwap ? 100.0 : 0.0;
+        return vwap != null && spot < vwap ? 100.0 : 0.0;
+    }
+
+    static double pcrScoreBucketed(double overallPcr, boolean isCall) {
+        if (isCall) return overallPcr >= 1.1 ? 100.0 : (overallPcr >= 0.8 ? 50.0 : 0.0);
+        return overallPcr <= 0.7 ? 100.0 : (overallPcr < 1.0 ? 50.0 : 0.0);
     }
 
     static double blendConfidence(Map<String, Double> scores, Map<String, Double> weights, boolean decollinearizeTrend) {

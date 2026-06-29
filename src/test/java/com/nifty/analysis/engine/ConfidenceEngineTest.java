@@ -127,6 +127,34 @@ class ConfidenceEngineTest {
     }
 
     @Test
+    void rsiScoreContinuous_isMonotonic_andDoesNotZeroStrongMomentum() {
+        // Bullish: rises 40→60, full at 60, and strong-but-not-extreme RSI 75 is NOT scored 0.
+        assertEquals(0.0, ConfidenceEngine.rsiScoreContinuous(40.0, true), 0.01);
+        assertEquals(50.0, ConfidenceEngine.rsiScoreContinuous(50.0, true), 0.01);
+        assertEquals(100.0, ConfidenceEngine.rsiScoreContinuous(60.0, true), 0.01);
+        assertTrue(ConfidenceEngine.rsiScoreContinuous(75.0, true) > 60.0,
+                "RSI 75 (strong momentum) must not be scored ~0 for a call");
+        // null → neutral
+        assertEquals(50.0, ConfidenceEngine.rsiScoreContinuous(null, true), 0.01);
+        // Bearish mirror: low RSI is favourable for a put.
+        assertEquals(100.0, ConfidenceEngine.rsiScoreContinuous(40.0, false), 0.01);
+        assertEquals(0.0, ConfidenceEngine.rsiScoreContinuous(60.0, false), 0.01);
+    }
+
+    @Test
+    void pcrAndVwapContinuous_rampSmoothly() {
+        // PCR bullish ramps 0.7→1.1; midpoint 0.9 → ~50.
+        assertEquals(50.0, ConfidenceEngine.pcrScoreContinuous(0.9, true), 0.01);
+        assertEquals(100.0, ConfidenceEngine.pcrScoreContinuous(1.1, true), 0.01);
+        assertEquals(0.0, ConfidenceEngine.pcrScoreContinuous(0.7, true), 0.01);
+        // VWAP: at VWAP → 50; above → >50 for a call; below → <50.
+        assertEquals(50.0, ConfidenceEngine.vwapScoreContinuous(23500.0, 23500.0, true), 0.5);
+        assertTrue(ConfidenceEngine.vwapScoreContinuous(23560.0, 23500.0, true) > 50.0);
+        assertTrue(ConfidenceEngine.vwapScoreContinuous(23440.0, 23500.0, true) < 50.0);
+        assertEquals(50.0, ConfidenceEngine.vwapScoreContinuous(23500.0, null, true), 0.01); // null → neutral
+    }
+
+    @Test
     void blendConfidence_allFactorsAgree_is100_eitherWay() {
         Map<String, Double> weights = Map.of(
                 "Trend", 15.0, "MultiTimeframe", 15.0, "VWAP", 15.0, "OI", 15.0,

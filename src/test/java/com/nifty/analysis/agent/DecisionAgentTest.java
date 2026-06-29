@@ -87,6 +87,8 @@ class DecisionAgentTest {
         ReflectionTestUtils.setField(decisionAgent, "strikeStep", 50);
         ReflectionTestUtils.setField(decisionAgent, "sidewaysExtraGate", 8.0);
         ReflectionTestUtils.setField(decisionAgent, "minLiquidityScore", 70.0);
+        ReflectionTestUtils.setField(decisionAgent, "calibrationMaxRequiredWinRate", 0.65);
+        ReflectionTestUtils.setField(decisionAgent, "momentumOppositionPenalty", 12.0);
         ReflectionTestUtils.setField(decisionAgent, "momentumConfirmationEnabled", false);
         ReflectionTestUtils.setField(decisionAgent, "entryTimingEnabled", false);
         ReflectionTestUtils.setField(decisionAgent, "sessionFilterEnabled", false);

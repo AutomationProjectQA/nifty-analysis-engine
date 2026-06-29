@@ -85,6 +85,11 @@ public class DecisionAgent {
     @Value("${nifty.signal.entry-overextension-penalty:15.0}")
     private double entryOverextensionPenalty;
 
+    // Soften (don't skip) an opposing 1-min momentum read: subtract this confidence penalty
+    // instead of vetoing the multi-signal consensus.
+    @Value("${nifty.signal.momentum-opposition-penalty:12.0}")
+    private double momentumOppositionPenalty;
+
     // Aggregate exposure cap: max simultaneously-open (ACTIVE) positions across all ladders.
     @Value("${nifty.risk.max-concurrent-positions:6}")
     private int maxConcurrentPositions;
@@ -100,7 +105,7 @@ public class DecisionAgent {
     // --- P3-3: direction by consensus of independent signals (not one 1-min tick) ---
     @Value("${nifty.signal.direction-consensus-enabled:true}")
     private boolean directionConsensusEnabled;
-    @Value("${nifty.signal.min-direction-agreement:3}")
+    @Value("${nifty.signal.min-direction-agreement:2}")
     private int minDirectionAgreement; // of 4 votes: technical, multi-timeframe, futures, OI
 
     // --- P5-1: defined-risk multi-leg strategy params ---
@@ -114,6 +119,12 @@ public class DecisionAgent {
     private boolean calibrationEnabled;
     @Value("${nifty.calibration.margin:0.0}")
     private double calibrationMargin; // extra cushion above break-even win-rate (0..1)
+    // Cap the required win-rate the calibration gate can demand. The break-even from the owner's
+    // 2%/20% R:R is ~0.91, which is unattainable and blocks every trade once trained. Until the
+    // R:R is revisited, cap the bar so calibration tightens but never fully closes the engine.
+    // (Phase-1 mitigation DA-F5 — flag for owner; does NOT change the actual target/stop.)
+    @Value("${nifty.calibration.max-required-winrate:0.65}")
+    private double calibrationMaxRequiredWinRate;
 
     // Cached once enough snapshot history exists, to avoid counting a growing table each cycle.
     private volatile boolean historySufficient = false;
@@ -260,16 +271,18 @@ public class DecisionAgent {
         if (directionConsensusEnabled) {
             // P3-3: require a CONSENSUS of independent signals, not one 1-minute technical tick.
             DirectionVote vote = voteDirection(latest, optionChainDtos, spotPrice, spotChange);
-            trace.note("direction_consensus", "bull=" + vote.bull() + ", bear=" + vote.bear() + ", need " + minDirectionAgreement + " of 4");
+            trace.note("direction_consensus", "bull=" + vote.bull() + ", bear=" + vote.bear()
+                    + ", participated=" + vote.participated() + "/4, need " + minDirectionAgreement);
             if (vote.bull() >= minDirectionAgreement && vote.bull() > vote.bear()) {
                 isBullish = true; isBearish = false;
             } else if (vote.bear() >= minDirectionAgreement && vote.bear() > vote.bull()) {
                 isBullish = false; isBearish = true;
             } else {
-                log.info("No directional consensus (bull={}, bear={}, need {} of 4). Skipping.",
-                        vote.bull(), vote.bear(), minDirectionAgreement);
+                log.info("No directional consensus (bull={}, bear={}, participated={}/4, need {}). Skipping.",
+                        vote.bull(), vote.bear(), vote.participated(), minDirectionAgreement);
                 reject(trace, "direction_consensus",
-                        "no consensus (bull=" + vote.bull() + ", bear=" + vote.bear() + ", need " + minDirectionAgreement + ")");
+                        "no consensus (bull=" + vote.bull() + ", bear=" + vote.bear()
+                                + ", participated=" + vote.participated() + ", need " + minDirectionAgreement + ")");
                 return;
             }
         } else {
@@ -287,13 +300,17 @@ public class DecisionAgent {
         trace.direction = isBullish ? "BULLISH" : "BEARISH";
         int atmStrike = spec.atmStrike(spotPrice);
 
-        // 2.5 Momentum confirmation: don't fight a strong opposing momentum tick.
+        // 2.5 Momentum confirmation: a single opposing 1-min momentum read shouldn't veto a
+        // multi-signal consensus (that reintroduces the tick-noise the consensus removes). Apply a
+        // confidence penalty instead of a hard skip (Phase-1 fix DA-F6).
+        double momentumPenalty = 0.0;
         if (momentumConfirmationEnabled) {
             AgentResponse momentum = marketAgent.analyze(latest, prevSpot);
             if ((isBullish && "BEARISH".equals(momentum.bias())) || (isBearish && "BULLISH".equals(momentum.bias()))) {
-                log.info("Momentum ({}) opposes {} direction. Skipping to avoid fighting the tape.", momentum.bias(), signalType);
-                reject(trace, "momentum", "momentum " + momentum.bias() + " opposes " + signalType);
-                return;
+                momentumPenalty = momentumOppositionPenalty;
+                log.info("Momentum ({}) opposes {}. Applying -{} confidence penalty (instead of skipping).",
+                        momentum.bias(), signalType, momentumOppositionPenalty);
+                trace.note("momentum", "opposing " + momentum.bias() + " → -" + momentumOppositionPenalty + " penalty");
             }
         }
 
@@ -357,11 +374,11 @@ public class DecisionAgent {
                 rawConfidence, latest, optionChainEntities, isBullish
         );
 
-        double finalConfidence = Math.max(0.0, criticResult.adjustedConfidence() - entryTimingPenalty);
+        double finalConfidence = Math.max(0.0, criticResult.adjustedConfidence() - entryTimingPenalty - momentumPenalty);
         log.info("Final evaluated signal confidence: {}% (Effective threshold = {}%)", finalConfidence, effectiveGate);
         trace.finalConfidence = finalConfidence;
         trace.note("confidence", "final=" + finalConfidence + " (raw=" + rawConfidence
-                + ", entryPenalty=" + entryTimingPenalty + "), gate=" + effectiveGate);
+                + ", entryPenalty=" + entryTimingPenalty + ", momentumPenalty=" + momentumPenalty + "), gate=" + effectiveGate);
 
         // 5. Gating: Signal generated only if adjusted confidence >= the effective gate.
         if (finalConfidence < effectiveGate) {
@@ -384,7 +401,9 @@ public class DecisionAgent {
         // a confidence of "80 points" only trades if history says 80 actually wins often enough.
         if (calibrationEnabled && calibrator.isTrained()) {
             double pWin = calibrator.probabilityOfWin(finalConfidence);
-            double required = calibrator.breakEvenWinRate() + calibrationMargin;
+            // Cap the demanded win-rate so an unviable R:R-driven break-even (~0.91) can't fully
+            // close the engine; calibration still tightens up to the cap.
+            double required = Math.min(calibrator.breakEvenWinRate() + calibrationMargin, calibrationMaxRequiredWinRate);
             if (pWin < required) {
                 log.info("Calibrated P(win)={}% below required {}% (break-even+margin). NO TRADE.",
                         Math.round(pWin * 10000.0) / 100.0, Math.round(required * 10000.0) / 100.0);
@@ -675,8 +694,8 @@ public class DecisionAgent {
         return openWhipsaw || lateSessionTheta;
     }
 
-    /** P3-3 vote tally from independent direction signals. */
-    private record DirectionVote(int bull, int bear) {}
+    /** P3-3 vote tally from independent direction signals (participated = voters that took a side). */
+    private record DirectionVote(int bull, int bear, int participated) {}
 
     /**
      * Counts bullish vs bearish votes across four INDEPENDENT signals:
@@ -706,8 +725,10 @@ public class DecisionAgent {
         String oi = optionsAgent.analyze(optionChain, spotPrice, spotChange).bias();
         if ("BULLISH".equals(oi)) bull++; else if ("BEARISH".equals(oi)) bear++;
 
-        log.info("Direction votes -> bull={}, bear={} (technical={}, mtf={}, oi={})", bull, bear, tech, mtf, oi);
-        return new DirectionVote(bull, bear);
+        int participated = bull + bear;
+        log.info("Direction votes -> bull={}, bear={}, participated={}/4 (technical={}, mtf={}, oi={})",
+                bull, bear, participated, tech, mtf, oi);
+        return new DirectionVote(bull, bear, participated);
     }
 
     /**
@@ -727,8 +748,10 @@ public class DecisionAgent {
         return trendOk && flowOk && pcrOk;
     }
 
+    // A missing factor means "no data", which is NEUTRAL (50), not maximally-opposing (0). Defaulting
+    // to 0 made the min-confirmation gate fail closed whenever a factor was absent (Phase-1 fix DA-F2).
     private static double factor(Map<String, Double> f, String key) {
-        return f.getOrDefault(key, 0.0);
+        return f.getOrDefault(key, 50.0);
     }
 
     private static double round2(double value) {

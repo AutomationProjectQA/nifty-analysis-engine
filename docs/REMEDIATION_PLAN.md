@@ -65,14 +65,18 @@ R1 (over-gating) explains *no trades*. R2 (silent fallbacks) + R3 (no observabil
 - ⛔ Verify on the VM: live-feed honesty deployed (chip Live/Simulated), valid `GEMINI_API_KEY` + Angel One session. *(deploy step — yours)*
 - **Exit (met in code):** you can answer from `decision-funnel` "how many candidates did each gate reject today", and from feed-status "is the feed live?"
 
-### Phase 1 — Unblock trade generation 🔴 (the burning problem)
-**Goal:** trades generate again, without abandoning capital preservation.
-- **Pre-req:** feed reads **Live** (else `RiskGuardService.block-on-simulated-data` blocks everything — already fixed; just verify).
-- **Soften the gate stack** (audit #1/#217; AUDIT doc T20-1): using the Phase-0 funnel data, convert hard early-returns to confidence penalties / candidate ranking. *(2 already softened this session: volatile-window, VWAP over-extension.)*
-- **Continuous confidence scoring** (audit #3; T20-3): replace `ConfidenceEngine`'s 0/50/100 buckets (RSI/VWAP/PCR/Futures) with continuous functions. (verified-in-code)
-- **Regime: add a BREAKOUT state + continuous trend strength** (audit #2; T20-2): `MarketRegimeAgent` is binary today. (verified-in-code)
-- **Re-tune `min-direction-agreement`** (audit #2 / Phase-1 #2): 3-of-4 rarely aligns; consider 2-of-4 or weighted vote.
-- **Exit:** measurable, controlled increase in trade candidates **and** generated signals vs the Phase-0 baseline (target a sane frequency, not max frequency); win-rate tracked, not crashed.
+### Phase 1 — Unblock trade generation 🔴 (the burning problem) — ✅ IMPLEMENTED (not yet deployed)
+**Goal:** trades generate again, without abandoning capital preservation. All changes are config-gated and traced (Phase-0), so each is measurable/tunable.
+- **Pre-req:** feed reads **Live** (else `RiskGuardService.block-on-simulated-data` blocks everything — fixed; verify on deploy).
+- ✅ **Consensus loosened** (DA-F1/AG-F6): `min-direction-agreement` 3→2; vote now reports `participated`/4 in the trace. (2 agreeing voters + strictly beating the other side.)
+- ✅ **`factor()` neutral default** (DA-F2): a missing confirmation factor now counts as 50 (neutral), not 0 (opposing) — the min-confirmation gate no longer fails closed on thin data.
+- ✅ **Momentum → penalty** (DA-F6): opposing 1-min momentum applies `momentum-opposition-penalty:12` instead of a hard veto.
+- ✅ **Continuous confidence scoring** (RC-S1/AG-F15): `ConfidenceEngine` RSI/VWAP/PCR/Futures are ramped (flag `nifty.confidence.continuous-scoring:true`); strong RSI no longer scored 0.
+- ✅ **Regime continuous + warm-up + breakout** (AG-F1/F2/F3): `MarketRegimeAgent` returns a continuous trend score, falls back to spot-vs-VWAP while EMAs warm up, boosts on range breakouts, and no longer tanks the score on VIX>18 (avoids double-count with the critic).
+- ✅ **Liquidity continuous + null-safe** (DA-F3/AG-F4): `LiquidityAgent` ramps with OI (config floor), removed the fake spread pass, unknown OI = neutral allow (no hard reject).
+- ✅ **Calibration bar capped** (DA-F5): `calibration.max-required-winrate:0.65` so the ~0.91 break-even from the 2%/20% R:R can't fully close the engine. **Owner decision still needed on the R:R itself.**
+- **Exit (met in code):** the fail-closed gates are softened and measurable; deploy, watch `/decision-funnel` move vs the Phase-0 baseline. Target a *sane* frequency, not max — tune `min-direction-agreement`/penalties from the funnel + win-rate.
+- ⚠️ **Owner decisions pending:** the 2%/20% target/stop R:R (root of the calibration problem) and whether to raise consensus back to 3 once data shows quality.
 
 ### Phase 2 — Signal quality & diagnosability 🟠
 **Goal:** the trades that now generate are *good*, and we can debug them.

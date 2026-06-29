@@ -74,19 +74,31 @@ nifty:
     sideways-extra-gate: 8.0
     # Require a liquid strike (LiquidityAgent score) before emitting a signal.
     min-liquidity-score: 70.0
-    # Skip entries that strongly oppose the latest momentum tick.
+    # Momentum confirmation: opposing-momentum no longer hard-skips — it applies a confidence
+    # penalty (Phase-1 DA-F6) so a single opposing tick can't veto the multi-signal consensus.
     momentum-confirmation-enabled: true
-    # Skip CE entries that are chasing an over-extended move above VWAP.
+    momentum-opposition-penalty: 12.0
+    # Skip CE entries that are chasing an over-extended move above VWAP (confidence penalty).
     entry-timing-enabled: true
+    entry-overextension-penalty: 15.0
     # P3-1: require INDEPENDENT confirmation before a signal — trend/structure AND order flow
     # (OI build-up or futures basis) AND a non-opposing PCR — not just a high blended score.
+    # Phase-1 DA-F2: a MISSING factor now counts as neutral (50), not opposing (0).
     min-confirmation-enabled: true
     confirm-score: 60.0        # a factor "confirms" when its direction-aware score >= this
     not-opposing-score: 50.0   # a factor is "not opposing" when its score >= this (>= neutral)
     # P3-3: decide direction by CONSENSUS of 4 independent signals (technical, multi-timeframe,
-    # futures basis, OI bias), not one 1-minute technical tick.
+    # futures basis, OI bias). Phase-1 DA-F1/AG-F6: lowered 3→2 because MultiTimeframe/OI often
+    # abstain on thin data, making 3-of-4 unreachable. Tune up with the /decision-funnel baseline.
     direction-consensus-enabled: true
-    min-direction-agreement: 3 # of 4 votes must agree
+    min-direction-agreement: 2 # of 4 votes must agree (>=2 and strictly beating the other side)
+
+  # Phase-1 AG-F4: continuous, config-driven liquidity scoring (was a binary OI>=50k gate with a
+  # fake spread pass). Score ramps with OI; unknown OI is allowed with a neutral score, not rejected.
+  liquidity:
+    good-oi-contracts: 50000
+    floor-fraction: 0.2
+    unknown-oi-score: 65.0
 
   # Avoid the volatile first 15 min after open and the theta-heavy final 30 min.
   # Only carves out those intraday windows (does not affect 24/7 simulation runs).
@@ -117,12 +129,19 @@ nifty:
     enabled: true
     min-samples: 30        # need this many resolved trades before the calibrated gate activates
     margin: 0.0            # extra win-rate cushion above break-even (0..1); raise to be stricter
+    # Phase-1 DA-F5: cap the required win-rate the gate can demand. The 2%/20% R:R implies a ~0.91
+    # break-even, which is unattainable and blocks every trade once trained. Cap it so calibration
+    # tightens but never fully closes the engine. PROPER fix = revisit the target/stop R:R (owner).
+    max-required-winrate: 0.65
 
   # Online learning: nudge confidence factor weights from resolved-trade outcomes.
   confidence:
     adaptive-enabled: true
     # Gentle online-learning rate (was 0.5 — lowered to reduce weight skew from noise).
     learning-rate: 0.25
+    # Phase-1 RC-S1: continuous (ramped) factor scoring instead of coarse 0/50/100 buckets, so
+    # confidence is stable near the gate. Set false to A/B against the old bucketed behaviour.
+    continuous-scoring: true
     # P3-2: Trend, MultiTimeframe and VWAP are collinear (all measure trend). When true, they are
     # collapsed into ONE group so trend is counted once, not ~3x (which inflated every score).
     decollinearize-trend: true
