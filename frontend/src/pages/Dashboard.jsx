@@ -8,7 +8,7 @@ import api from '../api/client';
 import { subscribe } from '../api/marketStream';
 import useFeedStatus from '../hooks/useFeedStatus';
 
-import TradingViewChart from '../components/TradingViewChart';
+import NiftyCandleChart from '../components/NiftyCandleChart';
 
 // Merge only DEFINED, non-null fields from a payload onto the previous state, so a partial
 // snapshot or a tick (which carries only some fields) never overwrites a good value with
@@ -32,7 +32,12 @@ const Dashboard = () => {
     rsi: 58.20,
     vwap: 23502.10,
     ema20: 23495.12,
-    ema50: 23478.45
+    ema50: 23478.45,
+    dayHigh: null,
+    dayLow: null,
+    prevClose: null,
+    week52High: null,
+    week52Low: null
   });
   
   const [live, setLive] = useState(null); // null=loading, true=connected, false=backend offline
@@ -82,6 +87,17 @@ const Dashboard = () => {
   const spotVwapDistance = marketData.niftySpot - marketData.vwap;
   const spotVwapPct = marketData.vwap ? (spotVwapDistance / marketData.vwap) * 100 : 0;
   const spotAboveVwap = spotVwapDistance >= 0;
+
+  // Day change vs the previous trading day's close (the real "Nifty up/down today").
+  const hasPrevClose = marketData.prevClose != null && marketData.prevClose > 0;
+  const dayChange = hasPrevClose ? marketData.niftySpot - marketData.prevClose : null;
+  const dayChangePct = hasPrevClose ? (dayChange / marketData.prevClose) * 100 : null;
+  const dayUp = (dayChange ?? 0) >= 0;
+
+  // 1-decimal Indian-format number, or an em-dash when the value isn't available yet.
+  const fmt = (v) => (v != null && !Number.isNaN(v)
+    ? Number(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : '—');
 
   // Volatility regime from the live VIX level (no fabricated "change").
   let vixLabel = 'Moderate volatility';
@@ -223,15 +239,51 @@ const Dashboard = () => {
         </Grid>
       </Grid>
 
+      {/* NIFTY day range / 52-week / previous close */}
+      <Card sx={{ mb: 4 }}>
+        <CardContent>
+          <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', gap: 1 }}>
+            <Typography variant="h6" sx={{ fontFamily: 'Outfit, sans-serif' }}>NIFTY 50 Key Statistics</Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, color: dayChange == null ? 'text.secondary' : (dayUp ? 'primary.main' : 'secondary.main') }}>
+              {dayChange != null && (dayUp ? <TrendingUpIcon fontSize="small" /> : <TrendingDownIcon fontSize="small" />)}
+              <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                {dayChange == null ? 'Change unavailable'
+                  : `${dayUp ? '+' : ''}${fmt(dayChange)} (${dayUp ? '+' : ''}${dayChangePct.toFixed(2)}%) today`}
+              </Typography>
+            </Box>
+          </Box>
+          <Grid container spacing={2}>
+            {[
+              { label: 'PREV. CLOSE', value: marketData.prevClose, color: 'text.primary' },
+              { label: "TODAY'S HIGH", value: marketData.dayHigh, color: 'primary.main' },
+              { label: "TODAY'S LOW", value: marketData.dayLow, color: 'secondary.main' },
+              { label: '52-WEEK HIGH', value: marketData.week52High, color: 'primary.main' },
+              { label: '52-WEEK LOW', value: marketData.week52Low, color: 'secondary.main' },
+            ].map((s) => (
+              <Grid key={s.label} size={{ xs: 6, sm: 4, md: 2.4 }}>
+                <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: 'action.hover', height: '100%' }}>
+                  <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, letterSpacing: 0.4 }}>
+                    {s.label}
+                  </Typography>
+                  <Typography variant="h6" sx={{ fontWeight: 700, mt: 0.5, fontFamily: 'Outfit, sans-serif', color: s.color }}>
+                    {s.value != null && s.value > 0 ? fmt(s.value) : '—'}
+                  </Typography>
+                </Box>
+              </Grid>
+            ))}
+          </Grid>
+        </CardContent>
+      </Card>
+
       {/* Main Charts & Key levels container */}
       <Grid container spacing={3} sx={{ mb: 4 }}>
         
-        {/* TradingView candlestick widget */}
+        {/* In-app Nifty candlestick chart (self-served candle data + live ticks) */}
         <Grid size={{ xs: 12, md: 8 }}>
           <Card sx={{ height: '100%' }}>
             <CardContent sx={{ p: 2 }}>
               <Typography variant="h6" sx={{ mb: 2, fontFamily: 'Outfit, sans-serif' }}>Live Nifty Chart (5m Interval)</Typography>
-              <TradingViewChart />
+              <NiftyCandleChart />
             </CardContent>
           </Card>
         </Grid>

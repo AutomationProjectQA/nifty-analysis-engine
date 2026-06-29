@@ -434,24 +434,55 @@ public class LlmService {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    public String generateMarketNews(double giftNifty, double dowFutures, double dxy, double crude, double fiiFlow) {
-        String prompt = "You are the Nifty Market News Summarizer. Based on the following global market metrics, generate a daily close summary article titled 'Top 5 Events Impacting Nifty Today'.\n\n"
-                + "Context:\n"
-                + "- GIFT Nifty Premium: " + giftNifty + " pts\n"
-                + "- Dow Jones Futures: " + dowFutures + " pts\n"
+    /**
+     * Summarizes the day's REAL market headlines (from RSS) plus live global cues into a
+     * 'Top 5 Events Impacting Nifty Today' article. The summary is grounded in actual headlines —
+     * no fabricated FII figure. GIFT Nifty is passed as an estimate derived from Dow futures and is
+     * labelled as such. If the LLM is unavailable, the fallback lists the real headlines verbatim
+     * (never a static template).
+     */
+    public String generateMarketNews(List<com.nifty.analysis.collector.client.impl.NewsRssClient.Headline> headlines,
+                                     double giftNiftyEst, double dowFutures, double dxy, double crude) {
+        StringBuilder headlineBlock = new StringBuilder();
+        if (headlines != null) {
+            int n = 1;
+            for (var h : headlines) {
+                headlineBlock.append(n++).append(". ").append(h.title());
+                if (h.source() != null) headlineBlock.append(" (" + h.source() + ")");
+                headlineBlock.append("\n");
+            }
+        }
+
+        String prompt = "You are a markets editor for an Indian options-trading desk. Using the REAL headlines and "
+                + "global cues below, write a markdown article titled 'Top 5 Events Impacting Nifty Today'.\n\n"
+                + "Today's headlines:\n" + (headlineBlock.length() > 0 ? headlineBlock : "(no headlines available)\n") + "\n"
+                + "Global cues (for context):\n"
+                + "- US Dow Jones Futures move: " + dowFutures + " pts\n"
                 + "- US Dollar Index (DXY): " + dxy + "\n"
                 + "- Brent Crude Oil: " + crude + " USD/bbl\n"
-                + "- Institutional FII net purchase: " + fiiFlow + " Cr\n\n"
+                + "- Estimated GIFT Nifty bias (derived from Dow futures, approximate): " + giftNiftyEst + " pts\n\n"
                 + "Guidelines:\n"
-                + "Provide exactly 5 numbered bullet points. Each bullet point should start with a bold title, followed by 1-2 sentence explanation of how that event/metric impacts the Nifty 50 index (e.g. imports pressure from crude, global cues from US markets, DXY currency flows, institutional buying activity, and Gift Nifty opening directions).\n"
-                + "Ensure the output is clean, formatted in markdown, and reads like a financial newspaper summary.";
+                + "Pick the 5 most market-moving items and write exactly 5 numbered bullets. Each starts with a bold "
+                + "title, then 1-2 sentences on the concrete impact on the Nifty 50 (direction, sector, levels). "
+                + "Prefer the actual headlines; use the global cues only as supporting context. Do NOT invent FII/DII "
+                + "figures or any number not given above. Output clean markdown only.";
 
-        return callGemini(prompt, "### Top 5 Events Impacting Nifty Today\n\n"
-                + "1. **FII Activity:** Institutional purchase of " + fiiFlow + " Cr provides liquidity support.\n"
-                + "2. **Global Cues:** US Dow Futures sitting at " + dowFutures + " pts directs opening momentum.\n"
-                + "3. **Crude Oil Pressures:** Brent crude at " + crude + " USD/bbl impacts inflation and fiscal deficit targets.\n"
-                + "4. **Currency Dynamics:** The Dollar Index (DXY) at " + dxy + " guides capital flows in emerging markets.\n"
-                + "5. **GIFT Nifty Cues:** GIFT Nifty premium indicating a starting directional bias of " + giftNifty + " pts.");
+        return callGemini(prompt, fallbackNewsFromHeadlines(headlines));
+    }
+
+    /** Builds a real-headline fallback (used only when the LLM is unavailable). */
+    private String fallbackNewsFromHeadlines(List<com.nifty.analysis.collector.client.impl.NewsRssClient.Headline> headlines) {
+        if (headlines == null || headlines.isEmpty()) {
+            return "### Top Market Headlines\n\nLive headlines are temporarily unavailable. Please try again shortly.";
+        }
+        StringBuilder sb = new StringBuilder("### Top Market Headlines\n\n");
+        int n = 1;
+        for (var h : headlines) {
+            if (n > 5) break;
+            sb.append(n++).append(". **").append(h.title()).append("**");
+            if (h.source() != null) sb.append(" — _").append(h.source()).append("_");
+            sb.append("\n");
+        }
+        return sb.toString();
     }
 }

@@ -135,6 +135,22 @@ const NewsIntelligence = () => {
                       <ReactMarkdown>{news.summary}</ReactMarkdown>
                     </Box>
 
+                    {/* Source link for real headlines pulled from the news feeds. */}
+                    {news.sourceUrl && /^https?:\/\//.test(news.sourceUrl) && (
+                      <Box sx={{ mt: 2 }}>
+                        <Button
+                          variant="text"
+                          size="small"
+                          href={news.sourceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          endIcon={<ArrowRightIcon />}
+                        >
+                          Read full story
+                        </Button>
+                      </Box>
+                    )}
+
                   </CardContent>
                 </Card>
               </Grid>

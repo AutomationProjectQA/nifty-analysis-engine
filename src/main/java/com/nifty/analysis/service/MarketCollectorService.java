@@ -52,6 +52,7 @@ public class MarketCollectorService {
     private final TelegramBotService telegramBotService;
     private final LlmService llmService;
     private final MarketStreamPublisher marketStreamPublisher;
+    private final MarketTickCache marketTickCache;
     private final com.nifty.analysis.engine.ConfidenceWeightTuner confidenceWeightTuner;
 
     @org.springframework.beans.factory.annotation.Value("${nifty.order-execution.lot-size:65}")
@@ -149,10 +150,23 @@ public class MarketCollectorService {
             snapshot.setEma50(ema50);
             snapshot.setRsi(rsi);
             snapshot.setVwap(vwap);
+            snapshot.setDayHigh(marketData.dayHigh());
+            snapshot.setDayLow(marketData.dayLow());
+            snapshot.setPrevClose(marketData.prevClose());
+            snapshot.setWeek52High(marketData.week52High());
+            snapshot.setWeek52Low(marketData.week52Low());
 
             marketSnapshotRepository.save(snapshot);
             redisService.saveLatestMarketSnapshot(snapshot);
             marketStreamPublisher.publishMarket(snapshot); // live push to the portal
+
+            // Seed the trusted reference for the streaming client's tick-sanity guard (NIFTY only).
+            if ("NIFTY".equals(instrument)) {
+                marketTickCache.setReference(
+                        snapshot.getNiftySpot() != null ? snapshot.getNiftySpot() : 0.0,
+                        snapshot.getNiftyFuture() != null ? snapshot.getNiftyFuture() : 0.0,
+                        snapshot.getIndiaVix() != null ? snapshot.getIndiaVix() : 0.0);
+            }
             log.info("[{}] Snapshot persisted: Spot={}, Future={}, VIX={}, EMA20={}, EMA50={}, RSI={}, VWAP={}",
                     instrument, snapshot.getNiftySpot(), snapshot.getNiftyFuture(), snapshot.getIndiaVix(),
                     snapshot.getEma20(), snapshot.getEma50(), snapshot.getRsi(), snapshot.getVwap());

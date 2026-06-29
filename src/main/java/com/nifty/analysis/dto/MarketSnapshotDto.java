@@ -7,5 +7,10 @@ public record MarketSnapshotDto(
     Double niftyFuture,
     Double indiaVix,
     Double volume,
-    LocalDateTime timestamp
+    LocalDateTime timestamp,
+    Double dayHigh,
+    Double dayLow,
+    Double prevClose,
+    Double week52High,
+    Double week52Low
 ) {}

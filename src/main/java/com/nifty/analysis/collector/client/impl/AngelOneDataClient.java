@@ -247,54 +247,166 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient,
             }
             request.put("exchangeTokens", exchangeTokens);
 
-            Map<String, Object> response = webClientBuilder.build().post()
-                    .uri("https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote/")
-                    .header("Authorization", "Bearer " + jwtToken)
-                    .header("Content-Type", "application/json")
-                    .header("Accept", "application/json")
-                    .header("X-UserType", "USER")
-                    .header("X-SourceID", "WEB")
-                    .header("X-ClientLocalIP", "192.168.1.100")
-                    .header("X-ClientPublicIP", "192.168.1.100")
-                    .header("X-MACAddress", "02:00:00:00:00:00")
-                    .header("X-PrivateKey", apiKey)
-                    .bodyValue(request)
-                    .retrieve()
-                    .bodyToMono(Map.class)
-                    .block();
+            Map<String, Object> response = postQuote(request);
 
             if (response != null && Boolean.TRUE.equals(response.get("status"))) {
                 Map<String, Object> data = (Map<String, Object>) response.get("data");
-                List<Map<String, Object>> fetched = (List<Map<String, Object>>) data.get("fetched");
-                
-                double spot = 23500.0;
-                double vix = 13.5;
-                double futures = 23530.0;
-                double volume = 200000.0;
+                List<Map<String, Object>> fetched = data != null
+                        ? (List<Map<String, Object>>) data.get("fetched") : null;
+                List<Map<String, Object>> unfetched = data != null
+                        ? (List<Map<String, Object>>) data.get("unfetched") : null;
 
-                for (Map<String, Object> quote : fetched) {
-                    String token = (String) quote.get("symbolToken");
-                    if (token == null) token = (String) quote.get("token");
-                    
-                    if (spotToken.equals(token)) {
-                        spot = parseDouble(quote.get("ltp"));
-                        double vol = parseDouble(quote.get("volume"));
-                        if (vol == 0.0) vol = parseDouble(quote.get("tradeVolume"));
-                        volume = vol;
-                    } else if (vixToken.equals(token)) {
-                        vix = parseDouble(quote.get("ltp"));
-                    } else if (token != null && token.equals(futToken)) {
-                        futures = parseDouble(quote.get("ltp"));
+                double spot = 0.0;
+                double vix = 0.0;
+                double futures = 0.0;
+                double volume = 0.0;
+                double dayHigh = 0.0, dayLow = 0.0, prevClose = 0.0, week52High = 0.0, week52Low = 0.0;
+                boolean spotFound = false;
+
+                if (fetched != null) {
+                    for (Map<String, Object> quote : fetched) {
+                        String token = (String) quote.get("symbolToken");
+                        if (token == null) token = (String) quote.get("token");
+                        token = token != null ? token.trim() : null;
+
+                        if (spotToken.equals(token)) {
+                            spot = parseDouble(quote.get("ltp"));
+                            double vol = parseDouble(quote.get("volume"));
+                            if (vol == 0.0) vol = parseDouble(quote.get("tradeVolume"));
+                            volume = vol;
+                            // Angel One FULL quote carries the day OHLC + 52-week extremes for the index.
+                            dayHigh = parseDouble(quote.get("high"));
+                            dayLow = parseDouble(quote.get("low"));
+                            prevClose = parseDouble(quote.get("close")); // previous trading day's close
+                            week52High = parseDouble(quote.get("52WeekHigh"));
+                            week52Low = parseDouble(quote.get("52WeekLow"));
+                            spotFound = spot > 0;
+                        } else if (vixToken.equals(token)) {
+                            vix = parseDouble(quote.get("ltp"));
+                        } else if (token != null && token.equals(futToken)) {
+                            futures = parseDouble(quote.get("ltp"));
+                        }
                     }
                 }
 
+                // If the index quote didn't actually come back, do NOT pretend we're live and do NOT
+                // serve hardcoded defaults. Log exactly what was requested vs returned so the bad
+                // token/exchange is obvious, then fall back to simulated (which flags "not live").
+                if (!spotFound) {
+                    List<String> fetchedTokens = fetched == null ? List.of()
+                            : fetched.stream().map(q -> String.valueOf(q.get("symbolToken"))).toList();
+                    log.warn("Angel One FULL quote status=true but NIFTY spot token '{}' (exch {}) was NOT returned. "
+                                    + "Requested={}, fetchedTokens={}, unfetched={}. Retrying in OHLC mode.",
+                            spotToken, spotExch, exchangeTokens, fetchedTokens, unfetched);
+                    // Indices are frequently rejected by FULL mode; OHLC mode reliably returns the
+                    // index LTP + day OHLC (52-week is unavailable in this mode).
+                    MarketSnapshotDto viaOhlc = fetchIndexViaOhlc(instrument, spotToken, spotExch, vixToken, vixExch, futToken);
+                    if (viaOhlc != null) {
+                        return viaOhlc;
+                    }
+                    log.error("OHLC fallback also failed for NIFTY spot token '{}'. Serving simulated fallback (not live).", spotToken);
+                    return getSimulatedFallbackMarketData(instrument);
+                }
+
+                // Futures/VIX may legitimately be missing; keep them sane rather than zero.
+                if (futures <= 0) futures = spot;
+                if (vix <= 0) vix = 13.5;
+
                 dataFeedStatus.update(instrument, true); // real live market data
-                return new MarketSnapshotDto(spot, futures, vix, volume, com.nifty.analysis.util.TimeUtil.nowIst());
+                log.info("Angel One live quote -> spot={}, fut={}, vix={}, dayHigh={}, dayLow={}, prevClose={}, 52wH={}, 52wL={}",
+                        spot, futures, vix, dayHigh, dayLow, prevClose, week52High, week52Low);
+                return new MarketSnapshotDto(spot, futures, vix, volume, com.nifty.analysis.util.TimeUtil.nowIst(),
+                        dayHigh, dayLow, prevClose, week52High, week52Low);
             }
         } catch (Exception e) {
             log.error("Failed to fetch market data from Angel One API. Using simulated fallback.", e);
         }
-        return getSimulatedFallbackMarketData("NIFTY");
+        return getSimulatedFallbackMarketData(instrument);
+    }
+
+    /** Single POST to the Angel One market quote endpoint with all required broker headers. */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> postQuote(Map<String, Object> request) {
+        return (Map<String, Object>) webClientBuilder.build().post()
+                .uri("https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote/")
+                .header("Authorization", "Bearer " + jwtToken)
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .header("X-UserType", "USER")
+                .header("X-SourceID", "WEB")
+                .header("X-ClientLocalIP", "192.168.1.100")
+                .header("X-ClientPublicIP", "192.168.1.100")
+                .header("X-MACAddress", "02:00:00:00:00:00")
+                .header("X-PrivateKey", apiKey)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .block();
+    }
+
+    /**
+     * OHLC-mode fallback for the index quote. Angel One frequently rejects index tokens in FULL
+     * mode (they land in 'unfetched'), but OHLC mode returns their LTP + day open/high/low/close
+     * reliably. 52-week extremes are not available in this mode, so they are left at 0.
+     * Returns null if even this doesn't yield a positive spot (caller then uses simulated data).
+     */
+    @SuppressWarnings("unchecked")
+    private MarketSnapshotDto fetchIndexViaOhlc(String instrument, String spotToken, String spotExch,
+                                                String vixToken, String vixExch, String futToken) {
+        try {
+            Map<String, Object> request = new HashMap<>();
+            request.put("mode", "OHLC");
+            Map<String, List<String>> exchangeTokens = new HashMap<>();
+            exchangeTokens.computeIfAbsent(spotExch, k -> new ArrayList<>()).add(spotToken);
+            exchangeTokens.computeIfAbsent(vixExch, k -> new ArrayList<>()).add(vixToken);
+            if (!"0".equals(futToken)) {
+                exchangeTokens.computeIfAbsent("NFO", k -> new ArrayList<>()).add(futToken);
+            }
+            request.put("exchangeTokens", exchangeTokens);
+
+            Map<String, Object> response = postQuote(request);
+            if (response == null || !Boolean.TRUE.equals(response.get("status"))) {
+                return null;
+            }
+            Map<String, Object> data = (Map<String, Object>) response.get("data");
+            List<Map<String, Object>> fetched = data != null
+                    ? (List<Map<String, Object>>) data.get("fetched") : null;
+            if (fetched == null) return null;
+
+            double spot = 0.0, vix = 0.0, futures = 0.0, dayHigh = 0.0, dayLow = 0.0, prevClose = 0.0;
+            boolean spotFound = false;
+            for (Map<String, Object> quote : fetched) {
+                String token = (String) quote.get("symbolToken");
+                if (token == null) token = (String) quote.get("token");
+                token = token != null ? token.trim() : null;
+
+                if (spotToken.equals(token)) {
+                    spot = parseDouble(quote.get("ltp"));
+                    dayHigh = parseDouble(quote.get("high"));
+                    dayLow = parseDouble(quote.get("low"));
+                    prevClose = parseDouble(quote.get("close"));
+                    spotFound = spot > 0;
+                } else if (vixToken.equals(token)) {
+                    vix = parseDouble(quote.get("ltp"));
+                } else if (token != null && token.equals(futToken)) {
+                    futures = parseDouble(quote.get("ltp"));
+                }
+            }
+
+            if (!spotFound) {
+                return null;
+            }
+            if (futures <= 0) futures = spot;
+            if (vix <= 0) vix = 13.5;
+            dataFeedStatus.update(instrument, true); // real live data (via OHLC mode)
+            log.info("Angel One OHLC-mode index quote -> spot={}, fut={}, vix={}, dayHigh={}, dayLow={}, prevClose={} (52-week N/A in OHLC mode)",
+                    spot, futures, vix, dayHigh, dayLow, prevClose);
+            return new MarketSnapshotDto(spot, futures, vix, 0.0, com.nifty.analysis.util.TimeUtil.nowIst(),
+                    dayHigh, dayLow, prevClose, 0.0, 0.0);
+        } catch (Exception e) {
+            log.warn("Angel One OHLC index fallback failed: {}", e.getMessage());
+            return null;
+        }
     }
 
     /**
@@ -637,7 +749,8 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient,
     private MarketSnapshotDto getSimulatedFallbackMarketData(String instrument) {
         dataFeedStatus.update(instrument, false); // this instrument is on simulated data
         double spot = 23500.0 + (new Random().nextDouble() - 0.5) * 10.0;
-        return new MarketSnapshotDto(spot, spot + 30.0, 13.5, 500000.0, com.nifty.analysis.util.TimeUtil.nowIst());
+        return new MarketSnapshotDto(spot, spot + 30.0, 13.5, 500000.0, com.nifty.analysis.util.TimeUtil.nowIst(),
+                spot + 80.0, spot - 80.0, spot - 20.0, spot + 1500.0, spot - 2500.0);
     }
 
     private List<OptionSnapshotDto> getSimulatedFallbackOptions() {

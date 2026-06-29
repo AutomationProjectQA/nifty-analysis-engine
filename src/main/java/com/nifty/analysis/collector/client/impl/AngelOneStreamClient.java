@@ -49,6 +49,11 @@ public class AngelOneStreamClient {
     @Value("${nifty.stream.option-push-throttle-ms:1000}")
     private long optionPushThrottleMs;
 
+    // Max % a streamed index tick may deviate from the trusted REST reference before it is treated
+    // as a likely misparse and dropped. Guards against wrong binary frame offsets reaching the UI.
+    @Value("${nifty.stream.max-tick-deviation-pct:10.0}")
+    private double maxTickDeviationPct;
+
     private final AngelOneDataClient angelOne;
     private final MarketTickCache tickCache;
     private final OptionTickCache optionTickCache;
@@ -180,6 +185,9 @@ public class AngelOneStreamClient {
     private void onIndexTick(Tick tick) {
         String kind = indexTokenKind.get(tick.token());
         if (kind == null) return;
+        if (!isPlausible(kind, tick.ltp())) {
+            return; // likely a misparsed frame — don't poison the cache/UI
+        }
         switch (kind) {
             case "SPOT" -> tickCache.updateSpot(tick.ltp());
             case "FUTURE" -> tickCache.updateFuture(tick.ltp());
@@ -187,6 +195,37 @@ public class AngelOneStreamClient {
             default -> { return; }
         }
         publisher.publishTick(tickCache.getNiftySpot(), tickCache.getNiftyFuture(), tickCache.getIndiaVix());
+    }
+
+    /**
+     * Validates a streamed index value against the trusted per-cycle REST reference. A value that
+     * is non-positive or deviates more than {@code maxTickDeviationPct} from the reference is
+     * almost certainly a wrong binary-frame offset — drop it and log loudly so the offset can be
+     * confirmed/fixed during the first live market session.
+     */
+    private boolean isPlausible(String kind, double ltp) {
+        if (ltp <= 0) {
+            log.warn("Angel stream: dropping non-positive {} tick ({}). Check frame offsets.", kind, ltp);
+            return false;
+        }
+        if (!tickCache.hasReference()) {
+            return true; // no reference yet (pre first REST cycle) — accept and let REST correct it
+        }
+        double ref = switch (kind) {
+            case "SPOT" -> tickCache.getReferenceSpot();
+            case "FUTURE" -> tickCache.getReferenceFuture();
+            case "VIX" -> tickCache.getReferenceVix();
+            default -> 0.0;
+        };
+        if (ref <= 0) return true; // no reference for this kind yet
+        double deviationPct = Math.abs(ltp - ref) / ref * 100.0;
+        if (deviationPct > maxTickDeviationPct) {
+            log.warn("Angel stream: dropping implausible {} tick {} (ref {}, {}% off > {}% limit). " +
+                            "Likely a wrong binary frame offset — verify SmartWebSocketV2 layout.",
+                    kind, ltp, ref, Math.round(deviationPct), maxTickDeviationPct);
+            return false;
+        }
+        return true;
     }
 
     private void onOptionTick(SnapQuoteTick tick) {

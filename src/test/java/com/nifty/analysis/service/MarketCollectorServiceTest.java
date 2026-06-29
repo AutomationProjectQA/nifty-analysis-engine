@@ -76,6 +76,9 @@ class MarketCollectorServiceTest {
     @Mock
     private com.nifty.analysis.engine.ConfidenceWeightTuner confidenceWeightTuner;
 
+    @Mock
+    private MarketTickCache marketTickCache;
+
     private MarketCollectorService marketCollectorService;
 
     @Captor
@@ -105,6 +108,7 @@ class MarketCollectorServiceTest {
                 telegramBotService,
                 llmService,
                 marketStreamPublisher,
+                marketTickCache,
                 confidenceWeightTuner
         );
         ReflectionTestUtils.setField(marketCollectorService, "lotSize", 65);
@@ -124,7 +128,7 @@ class MarketCollectorServiceTest {
     void testCollectSuccess() {
         // Arrange
         LocalDateTime now = LocalDateTime.now();
-        MarketSnapshotDto marketDto = new MarketSnapshotDto(23500.0, 23530.0, 13.5, 100000.0, now);
+        MarketSnapshotDto marketDto = new MarketSnapshotDto(23500.0, 23530.0, 13.5, 100000.0, now, 23590.0, 23410.0, 23480.0, 25000.0, 19500.0);
 
         OptionSnapshotDto optionDto = new OptionSnapshotDto(23500, 50000L, 60000L, 1000L, 2000L, 12.5, 1.2, 23500.0,
                 10000L, 12000L, now, null, null);
@@ -176,7 +180,7 @@ class MarketCollectorServiceTest {
                 (java.util.concurrent.Executor) Runnable::run);
 
         LocalDateTime now = com.nifty.analysis.util.TimeUtil.nowIst();
-        MarketSnapshotDto marketDto = new MarketSnapshotDto(23500.0, 23530.0, 13.5, 100000.0, now);
+        MarketSnapshotDto marketDto = new MarketSnapshotDto(23500.0, 23530.0, 13.5, 100000.0, now, 23590.0, 23410.0, 23480.0, 25000.0, 19500.0);
         when(marketDataClient.fetchMarketData("NIFTY")).thenReturn(marketDto);
         when(optionChainClient.fetchOptionChain("NIFTY")).thenReturn(List.of(
                 new OptionSnapshotDto(23500, 50000L, 60000L, 1000L, 2000L, 12.5, 1.2, 23500.0, 10000L, 12000L, now, null, null)));
