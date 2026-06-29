@@ -47,6 +47,9 @@ public class PortalControllerTest {
     private TradeSignalRepository tradeSignalRepository;
 
     @MockBean
+    private com.nifty.analysis.repository.DecisionTraceRepository decisionTraceRepository;
+
+    @MockBean
     private ContentGenerationService contentGenerationService;
 
     @Test

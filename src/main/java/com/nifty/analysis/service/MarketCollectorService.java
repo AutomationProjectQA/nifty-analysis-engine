@@ -286,15 +286,22 @@ public class MarketCollectorService {
             log.warn("Previous decision still running — skipping this cycle's evaluation to keep data collection on time.");
             return;
         }
-        decisionExecutor.execute(() -> {
-            try {
-                decisionAgent.evaluateMarketForSignals(snapshot, prevSpot);
-            } catch (Exception e) {
-                log.error("Async decision evaluation failed", e);
-            } finally {
-                decisionRunning.set(false);
-            }
-        });
+        try {
+            decisionExecutor.execute(() -> {
+                try {
+                    decisionAgent.evaluateMarketForSignals(snapshot, prevSpot);
+                } catch (Exception e) {
+                    log.error("Async decision evaluation failed", e);
+                } finally {
+                    decisionRunning.set(false);
+                }
+            });
+        } catch (Exception e) {
+            // If the submission itself fails (executor saturated/shutting down), release the guard —
+            // otherwise decisionRunning stays true forever and every future decision is skipped.
+            decisionRunning.set(false);
+            log.error("Failed to submit async decision task; releasing guard.", e);
+        }
     }
 
     /**

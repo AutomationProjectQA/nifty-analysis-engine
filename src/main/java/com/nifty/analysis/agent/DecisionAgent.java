@@ -138,6 +138,7 @@ public class DecisionAgent {
     private final TradeSignalRepository tradeSignalRepository;
     private final SignalExplanationRepository signalExplanationRepository;
     private final OptionSnapshotRepository optionSnapshotRepository;
+    private final com.nifty.analysis.repository.DecisionTraceRepository decisionTraceRepository;
     private final TelegramBotService telegramBotService;
     private final LlmService llmService;
     private final OrderExecutionService orderExecutionService;
@@ -145,15 +146,64 @@ public class DecisionAgent {
     private final RiskGuardService riskGuardService;
     private final OptionPricingService optionPricingService;
 
+    /** Phase-0 observability accumulator for one evaluation pass (per-gate notes + outcome). */
+    private static final class TraceCtx {
+        final String cycleId;
+        final String instrument;
+        final LocalDateTime evaluationTime;
+        String direction;
+        Double finalConfidence;
+        Double effectiveGate;
+        final StringBuilder gates = new StringBuilder();
+        TraceCtx(String cycleId, String instrument, LocalDateTime t) {
+            this.cycleId = cycleId; this.instrument = instrument; this.evaluationTime = t;
+        }
+        void note(String gate, String detail) { gates.append(gate).append(": ").append(detail).append('\n'); }
+    }
+
+    /** Persists a decision trace. Best-effort: a trace failure must never break the decision path. */
+    private void saveTrace(TraceCtx ctx, String outcome, String rejectStage, String rejectReason, int emitted) {
+        try {
+            com.nifty.analysis.entity.DecisionTrace t = new com.nifty.analysis.entity.DecisionTrace();
+            t.setCycleId(ctx.cycleId);
+            t.setInstrument(ctx.instrument);
+            t.setEvaluationTime(ctx.evaluationTime);
+            t.setDirection(ctx.direction);
+            t.setFinalConfidence(ctx.finalConfidence);
+            t.setEffectiveGate(ctx.effectiveGate);
+            t.setOutcome(outcome);
+            t.setRejectStage(rejectStage);
+            t.setRejectReason(rejectReason);
+            t.setGateDetail(ctx.gates.toString());
+            t.setSignalsEmitted(emitted);
+            t.setCreatedAt(com.nifty.analysis.util.TimeUtil.nowIst());
+            decisionTraceRepository.save(t);
+        } catch (Exception e) {
+            log.warn("Failed to persist decision trace: {}", e.getMessage());
+        }
+    }
+
+    /** Records a REJECTED trace at the given gate and logs a consistent one-line reason. */
+    private void reject(TraceCtx ctx, String stage, String reason) {
+        ctx.note(stage, "REJECT — " + reason);
+        log.info("[trace {}] {} REJECTED at {}: {}", ctx.cycleId, ctx.instrument, stage, reason);
+        saveTrace(ctx, "REJECTED", stage, reason, 0);
+    }
+
     @Transactional
     public void evaluateMarketForSignals(MarketSnapshot latest, Double prevSpot) {
         log.info("Decision Agent executing trade signals search...");
 
         // P5-2: everything below is scoped to this snapshot's instrument (NIFTY, BANKNIFTY, ...).
         String instrument = latest.getInstrument() != null ? latest.getInstrument() : "NIFTY";
+        // Phase-0 trace: one record per evaluation pass so the gate funnel is queryable.
+        String cycleId = java.util.UUID.randomUUID().toString().substring(0, 8);
+        TraceCtx trace = new TraceCtx(cycleId, instrument, latest.getSnapshotTime());
+
         com.nifty.analysis.instrument.InstrumentSpec spec = instrumentRegistry.get(instrument);
         if (spec == null) {
             log.warn("Unknown instrument '{}' — skipping evaluation.", instrument);
+            reject(trace, "instrument", "unknown instrument " + instrument);
             return;
         }
 
@@ -161,6 +211,7 @@ public class DecisionAgent {
         RiskGuardService.RiskCheck riskCheck = riskGuardService.canOpenNewTrade(instrument);
         if (!riskCheck.allowed()) {
             log.info("Risk guard blocked new trade: {}", riskCheck.reason());
+            reject(trace, "risk_guard", riskCheck.reason());
             return;
         }
 
@@ -173,6 +224,7 @@ public class DecisionAgent {
         LocalDateTime latestOptionTime = optionSnapshotRepository.findLatestSnapshotTimeByInstrument(instrument);
         if (latestOptionTime == null) {
             log.warn("No option snapshots available for {}. Cannot evaluate trading signals.", instrument);
+            reject(trace, "no_option_chain", "no option snapshots for " + instrument);
             return;
         }
 
@@ -190,6 +242,8 @@ public class DecisionAgent {
             effectiveGate += volatileWindowGatePenalty;
             log.info("Volatile session window: raising gate to {}% (instead of skipping).", effectiveGate);
         }
+        trace.effectiveGate = effectiveGate;
+        trace.note("regime", regimeResponse.bias() + " (score " + regimeResponse.score() + "), effectiveGate=" + effectiveGate);
 
         List<OptionSnapshotDto> optionChainDtos = optionChainEntities.stream().map(o -> new OptionSnapshotDto(
                 o.getStrikePrice(), o.getCeOi(), o.getPeOi(), o.getCeOiChange(), o.getPeOiChange(),
@@ -206,6 +260,7 @@ public class DecisionAgent {
         if (directionConsensusEnabled) {
             // P3-3: require a CONSENSUS of independent signals, not one 1-minute technical tick.
             DirectionVote vote = voteDirection(latest, optionChainDtos, spotPrice, spotChange);
+            trace.note("direction_consensus", "bull=" + vote.bull() + ", bear=" + vote.bear() + ", need " + minDirectionAgreement + " of 4");
             if (vote.bull() >= minDirectionAgreement && vote.bull() > vote.bear()) {
                 isBullish = true; isBearish = false;
             } else if (vote.bear() >= minDirectionAgreement && vote.bear() > vote.bull()) {
@@ -213,6 +268,8 @@ public class DecisionAgent {
             } else {
                 log.info("No directional consensus (bull={}, bear={}, need {} of 4). Skipping.",
                         vote.bull(), vote.bear(), minDirectionAgreement);
+                reject(trace, "direction_consensus",
+                        "no consensus (bull=" + vote.bull() + ", bear=" + vote.bear() + ", need " + minDirectionAgreement + ")");
                 return;
             }
         } else {
@@ -221,11 +278,13 @@ public class DecisionAgent {
             isBearish = "BEARISH".equals(technicalBias.bias());
             if (!isBullish && !isBearish) {
                 log.info("Market bias is Neutral. Skipping trade evaluation.");
+                reject(trace, "neutral_bias", "technical bias neutral");
                 return;
             }
         }
 
         String signalType = isBullish ? "BUY_CE" : "BUY_PE";
+        trace.direction = isBullish ? "BULLISH" : "BEARISH";
         int atmStrike = spec.atmStrike(spotPrice);
 
         // 2.5 Momentum confirmation: don't fight a strong opposing momentum tick.
@@ -233,6 +292,7 @@ public class DecisionAgent {
             AgentResponse momentum = marketAgent.analyze(latest, prevSpot);
             if ((isBullish && "BEARISH".equals(momentum.bias())) || (isBearish && "BULLISH".equals(momentum.bias()))) {
                 log.info("Momentum ({}) opposes {} direction. Skipping to avoid fighting the tape.", momentum.bias(), signalType);
+                reject(trace, "momentum", "momentum " + momentum.bias() + " opposes " + signalType);
                 return;
             }
         }
@@ -299,10 +359,14 @@ public class DecisionAgent {
 
         double finalConfidence = Math.max(0.0, criticResult.adjustedConfidence() - entryTimingPenalty);
         log.info("Final evaluated signal confidence: {}% (Effective threshold = {}%)", finalConfidence, effectiveGate);
+        trace.finalConfidence = finalConfidence;
+        trace.note("confidence", "final=" + finalConfidence + " (raw=" + rawConfidence
+                + ", entryPenalty=" + entryTimingPenalty + "), gate=" + effectiveGate);
 
         // 5. Gating: Signal generated only if adjusted confidence >= the effective gate.
         if (finalConfidence < effectiveGate) {
             log.info("Signal confidence ({}%) below threshold ({}%). NO TRADE.", finalConfidence, effectiveGate);
+            reject(trace, "confidence_gate", "confidence " + finalConfidence + " < gate " + effectiveGate);
             return;
         }
 
@@ -311,6 +375,7 @@ public class DecisionAgent {
         // flow (OI build-up or futures basis) AND a non-opposing PCR — before emitting.
         if (minConfirmationEnabled && !hasMinimumConfirmation(rawResult.factorScores())) {
             log.info("Insufficient independent confirmation (need trend + flow + non-opposing PCR). NO TRADE.");
+            reject(trace, "min_confirmation", "need trend + flow + non-opposing PCR; factors=" + rawResult.factorScores());
             return;
         }
 
@@ -323,6 +388,8 @@ public class DecisionAgent {
             if (pWin < required) {
                 log.info("Calibrated P(win)={}% below required {}% (break-even+margin). NO TRADE.",
                         Math.round(pWin * 10000.0) / 100.0, Math.round(required * 10000.0) / 100.0);
+                reject(trace, "calibration", "P(win)=" + Math.round(pWin * 10000.0) / 100.0
+                        + "% < required " + Math.round(required * 10000.0) / 100.0 + "%");
                 return;
             }
             log.info("Calibrated P(win)={}% clears required {}%.",
@@ -344,6 +411,8 @@ public class DecisionAgent {
                 strategySelector.select(regimeResponse.bias(), isBullish);
         if (strategy.isMultiLeg()) {
             emitMultiLegSignal(spec, strategy, atmStrike, finalConfidence, latest.getIndiaVix(), thesis);
+            trace.note("emit", "multi-leg " + strategy + " @ " + atmStrike);
+            saveTrace(trace, "EMITTED", null, null, 1);
             return;
         }
 
@@ -363,6 +432,14 @@ public class DecisionAgent {
         }
         log.info("Strike-ladder evaluation complete: {} signal(s) emitted from {} candidate strike(s).",
                 emitted, candidateStrikes.size());
+        if (emitted > 0) {
+            trace.note("emit", emitted + " of " + candidateStrikes.size() + " ladder strikes");
+            saveTrace(trace, "EMITTED", null, null, emitted);
+        } else {
+            // Passed all direction/confidence gates but every strike failed liquidity/duplicate/cap.
+            reject(trace, "per_strike_filters",
+                    "0 of " + candidateStrikes.size() + " strikes passed liquidity/duplicate/exposure");
+        }
     }
 
     /**

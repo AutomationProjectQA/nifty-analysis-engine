@@ -61,6 +61,7 @@ class DecisionAgentTest {
     @Mock private TradeSignalRepository tradeSignalRepository;
     @Mock private SignalExplanationRepository signalExplanationRepository;
     @Mock private OptionSnapshotRepository optionSnapshotRepository;
+    @Mock private com.nifty.analysis.repository.DecisionTraceRepository decisionTraceRepository;
     @Mock private TelegramBotService telegramBotService;
     @Mock private LlmService llmService;
     @Mock private OrderExecutionService orderExecutionService;
@@ -181,6 +182,15 @@ class DecisionAgentTest {
         verify(optionSnapshotRepository, never()).findLatestSnapshotTime();
         verify(tradeSignalRepository, never()).save(any());
         verify(orderExecutionService, never()).executeOrder(anyString(), anyInt(), anyDouble());
+
+        // Phase-0 observability: the rejection is recorded as a decision trace at the risk_guard gate.
+        org.mockito.ArgumentCaptor<com.nifty.analysis.entity.DecisionTrace> traceCaptor =
+                org.mockito.ArgumentCaptor.forClass(com.nifty.analysis.entity.DecisionTrace.class);
+        verify(decisionTraceRepository).save(traceCaptor.capture());
+        com.nifty.analysis.entity.DecisionTrace t = traceCaptor.getValue();
+        org.junit.jupiter.api.Assertions.assertEquals("REJECTED", t.getOutcome());
+        org.junit.jupiter.api.Assertions.assertEquals("risk_guard", t.getRejectStage());
+        org.junit.jupiter.api.Assertions.assertTrue(t.getRejectReason().contains("Max trades per day"));
     }
 
     @Test
