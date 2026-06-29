@@ -76,6 +76,9 @@ class MarketCollectorServiceTest {
     @Mock
     private com.nifty.analysis.engine.ConfidenceWeightTuner confidenceWeightTuner;
 
+    @Mock
+    private MarketTickCache marketTickCache;
+
     private MarketCollectorService marketCollectorService;
 
     @Captor
@@ -105,6 +108,7 @@ class MarketCollectorServiceTest {
                 telegramBotService,
                 llmService,
                 marketStreamPublisher,
+                marketTickCache,
                 confidenceWeightTuner
         );
         ReflectionTestUtils.setField(marketCollectorService, "lotSize", 65);

@@ -218,6 +218,10 @@ nifty:
   stream:
     enabled: true
     url: "wss://smartapisocket.angelone.in/smart-stream"
+    # Sanity guard: drop a streamed index tick that deviates more than this % from the trusted
+    # per-cycle REST snapshot (protects the UI from a wrong binary frame offset). Warnings are
+    # logged on every drop so offsets can be confirmed during the first live session.
+    max-tick-deviation-pct: 10.0
 
   collector:
     # Ingestion provider: simulated or angelone

@@ -13,5 +13,7 @@ public interface MarketNewsRepository extends JpaRepository<MarketNews, Long> {
 
     List<MarketNews> findTop5ByOrderByPublishedAtDesc();
 
+    boolean existsByTitle(String title);
+
     Page<MarketNews> findAllByOrderByPublishedAtDesc(Pageable pageable);
 }
