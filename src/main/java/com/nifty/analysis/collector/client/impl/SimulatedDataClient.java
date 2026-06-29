@@ -35,8 +35,20 @@ public class SimulatedDataClient implements MarketDataClient, OptionChainClient 
         double spot;
         double vix = 13.5;
         double volume = 500000.0;
+        double dayHigh;
+        double dayLow;
+        final double prevClose;     // simulated previous-day close = opening baseline
+        final double week52High;
+        final double week52Low;
         final List<long[]> strikeOi = new ArrayList<>(); // [strike, lastCeOi, lastPeOi]
-        InstrumentState(double spot) { this.spot = spot; }
+        InstrumentState(double spot) {
+            this.spot = spot;
+            this.dayHigh = spot;
+            this.dayLow = spot;
+            this.prevClose = spot;
+            this.week52High = spot * 1.08;
+            this.week52Low = spot * 0.85;
+        }
     }
 
     /** Reasonable starting index level per instrument. */
@@ -61,10 +73,13 @@ public class SimulatedDataClient implements MarketDataClient, OptionChainClient 
         s.spot = Math.round((s.spot + (random.nextDouble() - 0.5) * 30.0 * scale) * 100.0) / 100.0;
         s.vix = Math.max(10.0, Math.min(25.0, Math.round((s.vix + (random.nextDouble() - 0.5) * 0.4) * 100.0) / 100.0));
         s.volume += Math.round(random.nextDouble() * 50000.0);
+        s.dayHigh = Math.max(s.dayHigh, s.spot);
+        s.dayLow = Math.min(s.dayLow, s.spot);
 
         double futurePremium = (25.0 + random.nextDouble() * 15.0) * scale;
         double futurePrice = Math.round((s.spot + futurePremium) * 100.0) / 100.0;
-        return new MarketSnapshotDto(s.spot, futurePrice, s.vix, s.volume, com.nifty.analysis.util.TimeUtil.nowIst());
+        return new MarketSnapshotDto(s.spot, futurePrice, s.vix, s.volume, com.nifty.analysis.util.TimeUtil.nowIst(),
+                s.dayHigh, s.dayLow, s.prevClose, s.week52High, s.week52Low);
     }
 
     @Override

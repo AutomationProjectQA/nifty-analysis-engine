@@ -49,4 +49,20 @@ public class MarketSnapshot {
 
     @Column(name = "vwap")
     private Double vwap;
+
+    // Intraday range, previous close, and 52-week extremes (from the live broker quote).
+    @Column(name = "day_high")
+    private Double dayHigh;
+
+    @Column(name = "day_low")
+    private Double dayLow;
+
+    @Column(name = "prev_close")
+    private Double prevClose;
+
+    @Column(name = "week52_high")
+    private Double week52High;
+
+    @Column(name = "week52_low")
+    private Double week52Low;
 }

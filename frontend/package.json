@@ -16,6 +16,7 @@
     "@mui/material": "^9.1.1",
     "@stomp/stompjs": "^7.3.0",
     "axios": "^1.17.0",
+    "lightweight-charts": "^4.2.3",
     "prop-types": "^15.8.1",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",

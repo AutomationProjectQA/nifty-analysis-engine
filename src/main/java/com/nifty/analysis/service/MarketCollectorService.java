@@ -150,6 +150,11 @@ public class MarketCollectorService {
             snapshot.setEma50(ema50);
             snapshot.setRsi(rsi);
             snapshot.setVwap(vwap);
+            snapshot.setDayHigh(marketData.dayHigh());
+            snapshot.setDayLow(marketData.dayLow());
+            snapshot.setPrevClose(marketData.prevClose());
+            snapshot.setWeek52High(marketData.week52High());
+            snapshot.setWeek52Low(marketData.week52Low());
 
             marketSnapshotRepository.save(snapshot);
             redisService.saveLatestMarketSnapshot(snapshot);
