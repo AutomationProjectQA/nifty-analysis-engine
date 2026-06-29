@@ -75,6 +75,16 @@ public class DecisionAgent {
     @Value("${nifty.timing.session-filter-enabled:true}")
     private boolean sessionFilterEnabled;
 
+    // Soften (don't skip) the volatile open/close window: raise the confidence gate by this many
+    // points instead of blocking outright, so a strong open-driven move can still trade.
+    @Value("${nifty.timing.volatile-window-gate-penalty:10.0}")
+    private double volatileWindowGatePenalty;
+
+    // Soften (don't skip) an over-extended-above-VWAP entry: subtract this confidence penalty
+    // instead of blocking, so chasing setups need extra conviction rather than being banned.
+    @Value("${nifty.signal.entry-overextension-penalty:15.0}")
+    private double entryOverextensionPenalty;
+
     // Aggregate exposure cap: max simultaneously-open (ACTIVE) positions across all ladders.
     @Value("${nifty.risk.max-concurrent-positions:6}")
     private int maxConcurrentPositions;
@@ -154,12 +164,10 @@ public class DecisionAgent {
             return;
         }
 
-        // 0.5 Time-of-day filter: avoid the volatile first minutes after open and the
-        // theta-heavy final window. Only carves out those intraday windows.
-        if (sessionFilterEnabled && inVolatileWindow()) {
-            log.info("Within a volatile session window (open whipsaw / late-session theta). Skipping trade evaluation.");
-            return;
-        }
+        // 0.5 Time-of-day filter: the volatile open (09:15–09:30) and theta-heavy close
+        // (15:00–15:30) are riskier, but blocking them outright kills legitimate open-driven
+        // moves. Soften to a higher confidence gate (applied below) instead of skipping.
+        boolean volatileWindow = sessionFilterEnabled && inVolatileWindow();
 
         // 1. Fetch Option Snapshots to retrieve active option chain
         LocalDateTime latestOptionTime = optionSnapshotRepository.findLatestSnapshotTimeByInstrument(instrument);
@@ -178,10 +186,15 @@ public class DecisionAgent {
             effectiveGate += sidewaysExtraGate;
             log.info("Sideways regime detected. Raising gate to {}% (instead of skipping).", effectiveGate);
         }
+        if (volatileWindow) {
+            effectiveGate += volatileWindowGatePenalty;
+            log.info("Volatile session window: raising gate to {}% (instead of skipping).", effectiveGate);
+        }
 
         List<OptionSnapshotDto> optionChainDtos = optionChainEntities.stream().map(o -> new OptionSnapshotDto(
                 o.getStrikePrice(), o.getCeOi(), o.getPeOi(), o.getCeOiChange(), o.getPeOiChange(),
-                o.getIv(), o.getPcr(), o.getMaxPain(), o.getCeVolume(), o.getPeVolume(), o.getSnapshotTime()
+                o.getIv(), o.getPcr(), o.getMaxPain(), o.getCeVolume(), o.getPeVolume(), o.getSnapshotTime(),
+                o.getCeLtp(), o.getPeLtp()
         )).toList();
 
         double spotPrice = latest.getNiftySpot();
@@ -224,12 +237,15 @@ public class DecisionAgent {
             }
         }
 
-        // 2.6 Entry timing: skip CE entries that are chasing an over-extended move above VWAP.
+        // 2.6 Entry timing: an over-extended-above-VWAP CE entry is chasing. Rather than skip
+        // outright, apply a confidence penalty so only high-conviction chases still trade.
+        double entryTimingPenalty = 0.0;
         if (entryTimingEnabled && isBullish) {
             AgentResponse timing = entryTimingAgent.validateEntry(latest, prevSpot);
             if (timing.score() <= 30.0) {
-                log.info("Entry timing flags over-extension above VWAP. Waiting for a pullback. Skipping.");
-                return;
+                entryTimingPenalty = entryOverextensionPenalty;
+                log.info("Entry timing flags over-extension above VWAP. Applying -{} confidence penalty (instead of skipping).",
+                        entryOverextensionPenalty);
             }
         }
 
@@ -281,7 +297,7 @@ public class DecisionAgent {
                 rawConfidence, latest, optionChainEntities, isBullish
         );
 
-        double finalConfidence = criticResult.adjustedConfidence();
+        double finalConfidence = Math.max(0.0, criticResult.adjustedConfidence() - entryTimingPenalty);
         log.info("Final evaluated signal confidence: {}% (Effective threshold = {}%)", finalConfidence, effectiveGate);
 
         // 5. Gating: Signal generated only if adjusted confidence >= the effective gate.

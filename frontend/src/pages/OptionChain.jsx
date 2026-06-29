@@ -4,6 +4,7 @@ import Grid from '@mui/material/Grid';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import api from '../api/client';
 import { subscribe } from '../api/marketStream';
+import useFeedStatus from '../hooks/useFeedStatus';
 
 import AdSenseSlot from '../components/AdSenseSlot';
 
@@ -34,13 +35,18 @@ const sanitizeChain = (rows) =>
       iv: Number(r.iv) || 0,
       ceVolume: Number(r.ceVolume) || 0,
       peVolume: Number(r.peVolume) || 0,
+      ceLtp: Number(r.ceLtp) || 0,
+      peLtp: Number(r.peLtp) || 0,
     }));
 
 const OptionChain = () => {
   const [optionChain, setOptionChain] = useState(mockOptionChain);
   const [spotPrice, setSpotPrice] = useState(23510.50);
   const [vwap, setVwap] = useState(null);
-  const [live, setLive] = useState(null); // null=loading, true=live, false=demo fallback
+  const [live, setLive] = useState(null); // null=loading, true=got chain data, false=demo fallback
+  // Even with a chain payload, the broker feed may be a SIMULATED fallback — flag it honestly.
+  const feedSource = useFeedStatus();
+  const isSimulated = feedSource === 'SIMULATED';
 
   const fetchOptionData = async () => {
     try {
@@ -92,6 +98,8 @@ const OptionChain = () => {
           ...row,
           ceOi: Number(t.ceOi) || row.ceOi,
           peOi: Number(t.peOi) || row.peOi,
+          ceLtp: Number(t.ceLtp) || row.ceLtp,
+          peLtp: Number(t.peLtp) || row.peLtp,
         };
       }));
       setLive(true);
@@ -162,6 +170,14 @@ const OptionChain = () => {
           <Chip label="Demo data — not live" size="small"
             sx={{ bgcolor: 'rgba(255,159,10,0.12)', color: '#ff9f0a', border: '1px solid rgba(255,159,10,0.3)', fontWeight: 600 }} />
         )}
+        {live === true && isSimulated && (
+          <Chip label="Simulated feed — not live" size="small"
+            sx={{ bgcolor: 'rgba(255,159,10,0.12)', color: '#ff9f0a', border: '1px solid rgba(255,159,10,0.3)', fontWeight: 600 }} />
+        )}
+        {live === true && feedSource === 'LIVE' && (
+          <Chip label="● Live" size="small"
+            sx={{ bgcolor: 'rgba(0,179,134,0.12)', color: '#00b386', border: '1px solid rgba(0,179,134,0.3)', fontWeight: 600 }} />
+        )}
       </Box>
 
       {/* Summary Cards */}
@@ -224,14 +240,15 @@ const OptionChain = () => {
           <TableHead>
             <TableRow>
               {/* Calls Side */}
-              <TableCell align="center" colSpan={4} sx={{ bgcolor: 'rgba(239, 83, 80, 0.05)', color: '#ef5350', borderRight: '2px solid #e9eaf2', fontWeight: 700 }}>CALLS (CE)</TableCell>
+              <TableCell align="center" colSpan={5} sx={{ bgcolor: 'rgba(239, 83, 80, 0.05)', color: '#ef5350', borderRight: '2px solid #e9eaf2', fontWeight: 700 }}>CALLS (CE)</TableCell>
               {/* Strike Column */}
               <TableCell align="center" sx={{ bgcolor: '#f7f8fc', fontWeight: 700 }}>STRIKE</TableCell>
               {/* Puts Side */}
-              <TableCell align="center" colSpan={4} sx={{ bgcolor: 'rgba(38, 166, 154, 0.05)', color: '#26a69a', borderLeft: '2px solid #e9eaf2', fontWeight: 700 }}>PUTS (PE)</TableCell>
+              <TableCell align="center" colSpan={5} sx={{ bgcolor: 'rgba(38, 166, 154, 0.05)', color: '#26a69a', borderLeft: '2px solid #e9eaf2', fontWeight: 700 }}>PUTS (PE)</TableCell>
             </TableRow>
             <TableRow>
               {/* Call Headers */}
+              <TableCell align="right" sx={{ bgcolor: '#f7f8fc', fontWeight: 700 }}>LTP</TableCell>
               <TableCell align="right" sx={{ bgcolor: '#f7f8fc' }}>Volume</TableCell>
               <TableCell align="right" sx={{ bgcolor: '#f7f8fc' }}>IV</TableCell>
               <TableCell align="right" sx={{ bgcolor: '#f7f8fc' }}>OI Chg</TableCell>
@@ -243,6 +260,7 @@ const OptionChain = () => {
               <TableCell align="left" sx={{ bgcolor: '#f7f8fc' }}>OI Chg</TableCell>
               <TableCell align="left" sx={{ bgcolor: '#f7f8fc' }}>IV</TableCell>
               <TableCell align="left" sx={{ bgcolor: '#f7f8fc' }}>Volume</TableCell>
+              <TableCell align="left" sx={{ bgcolor: '#f7f8fc', fontWeight: 700 }}>LTP</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -261,6 +279,10 @@ const OptionChain = () => {
                     '&:hover': { bgcolor: 'action.hover' }
                   }}
                 >
+                  {/* CE LTP */}
+                  <TableCell align="right" sx={{ fontWeight: 700, color: '#ef5350' }}>
+                    {row.ceLtp > 0 ? `₹${row.ceLtp.toFixed(2)}` : '—'}
+                  </TableCell>
                   {/* CE Volume */}
                   <TableCell align="right">{(row.ceVolume || 0).toLocaleString('en-IN')}</TableCell>
                   {/* CE IV */}
@@ -305,6 +327,10 @@ const OptionChain = () => {
                   <TableCell align="left" sx={{ color: 'text.secondary' }}>{(row.iv || 0.0).toFixed(1)}%</TableCell>
                   {/* PE Volume */}
                   <TableCell align="left">{(row.peVolume || 0).toLocaleString('en-IN')}</TableCell>
+                  {/* PE LTP */}
+                  <TableCell align="left" sx={{ fontWeight: 700, color: '#26a69a' }}>
+                    {row.peLtp > 0 ? `₹${row.peLtp.toFixed(2)}` : '—'}
+                  </TableCell>
                 </TableRow>
               );
             })}

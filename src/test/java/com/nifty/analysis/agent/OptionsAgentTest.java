@@ -42,7 +42,7 @@ class OptionsAgentTest {
     void testAnalyze_BullishVolumePcrAndVelocity() {
         LocalDateTime now = LocalDateTime.now();
         // Bullish PCR (>1.2), Bullish Volume PCR (1.5)
-        OptionSnapshotDto strikeCe = new OptionSnapshotDto(23200, 100000L, 150000L, 0L, 20000L, 15.0, 1.5, 23200.0, 10000L, 15000L, now);
+        OptionSnapshotDto strikeCe = new OptionSnapshotDto(23200, 100000L, 150000L, 0L, 20000L, 15.0, 1.5, 23200.0, 10000L, 15000L, now, null, null);
         List<OptionSnapshotDto> chain = List.of(strikeCe);
 
         // Mock historical snapshots for ATM velocity calculation

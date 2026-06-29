@@ -213,13 +213,14 @@ const LearningCenter = () => {
       </Grid>
 
       {/* Dialog for Reading Article */}
-      <Dialog 
-        open={Boolean(selectedArticle)} 
+      <Dialog
+        open={Boolean(selectedArticle)}
         onClose={() => setSelectedArticle(null)}
         maxWidth="md"
         fullWidth
+        scroll="paper"
         PaperProps={{
-          sx: { bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 3 }
+          sx: { bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 3, maxHeight: '90vh' }
         }}
       >
         {selectedArticle && (
@@ -227,7 +228,7 @@ const LearningCenter = () => {
             <DialogTitle sx={{ fontFamily: 'Outfit, sans-serif', fontWeight: 700, borderBottom: '1px solid', borderColor: 'divider', pb: 2 }}>
               {selectedArticle.title}
             </DialogTitle>
-            <DialogContent sx={{ mt: 2 }}>
+            <DialogContent dividers sx={{ overflowY: 'auto' }}>
               {/* Insert AdSense Slot inside the reading view */}
               <AdSenseSlot adSlot="learning-article-inline" />
 

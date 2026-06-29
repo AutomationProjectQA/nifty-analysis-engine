@@ -175,6 +175,8 @@ public class MarketCollectorService {
                 option.setMaxPain(calculatedMaxPain);
                 option.setCeVolume(dto.ceVolume());
                 option.setPeVolume(dto.peVolume());
+                option.setCeLtp(dto.ceLtp());
+                option.setPeLtp(dto.peLtp());
                 return option;
             }).toList();
 

@@ -148,7 +148,8 @@ public class BacktestingEngine {
             }
             List<OptionSnapshotDto> optionDtos = optionChain.stream().map(o -> new OptionSnapshotDto(
                     o.getStrikePrice(), o.getCeOi(), o.getPeOi(), o.getCeOiChange(), o.getPeOiChange(),
-                    o.getIv(), o.getPcr(), o.getMaxPain(), o.getCeVolume(), o.getPeVolume(), o.getSnapshotTime()
+                    o.getIv(), o.getPcr(), o.getMaxPain(), o.getCeVolume(), o.getPeVolume(), o.getSnapshotTime(),
+                    o.getCeLtp(), o.getPeLtp()
             )).toList();
 
             AgentResponse technicalBias = technicalAgent.analyze(current);

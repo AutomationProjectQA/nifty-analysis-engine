@@ -216,7 +216,7 @@ nifty:
   # Requires provider: angelone and a valid live session. Default off — the REST
   # collector still runs; this only adds live ticks on top.
   stream:
-    enabled: false
+    enabled: true
     url: "wss://smartapisocket.angelone.in/smart-stream"
 
   collector:

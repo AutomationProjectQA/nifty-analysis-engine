@@ -55,4 +55,11 @@ public class OptionSnapshot {
 
     @Column(name = "pe_volume")
     private Long peVolume;
+
+    // Last traded price of the CE/PE contract at this strike (from the live broker quote).
+    @Column(name = "ce_ltp")
+    private Double ceLtp;
+
+    @Column(name = "pe_ltp")
+    private Double peLtp;
 }
