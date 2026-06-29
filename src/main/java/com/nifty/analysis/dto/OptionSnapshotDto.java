@@ -13,5 +13,7 @@ public record OptionSnapshotDto(
     Double maxPain,
     Long ceVolume,
     Long peVolume,
-    LocalDateTime timestamp
+    LocalDateTime timestamp,
+    Double ceLtp,
+    Double peLtp
 ) {}

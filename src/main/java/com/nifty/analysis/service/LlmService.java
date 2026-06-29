@@ -364,30 +364,73 @@ public class LlmService {
         contentsMap.put("parts", List.of(partsMap));
         requestBody.put("contents", List.of(contentsMap));
 
+        // CRITICAL: gemini-2.5-flash enables "thinking" by default, which silently consumes the
+        // entire output budget and returns a candidate with finishReason=MAX_TOKENS and NO parts —
+        // the parser then fails and we fall back to a static template (the boilerplate / one-liner
+        // the portal was showing). Disable thinking and cap output so tokens go to the answer.
+        Map<String, Object> generationConfig = new HashMap<>();
+        generationConfig.put("maxOutputTokens", 2048);
+        generationConfig.put("temperature", 0.7);
+        generationConfig.put("thinkingConfig", Map.of("thinkingBudget", 0));
+        requestBody.put("generationConfig", generationConfig);
+
         try {
-            String response = webClientBuilder.build().post()
+            Map<String, Object> map = (Map<String, Object>) webClientBuilder.build().post()
                     .uri(url)
                     .bodyValue(requestBody)
                     .retrieve()
                     .bodyToMono(Map.class)
-                    .map(map -> {
-                        try {
-                            List<Map<String, Object>> candidates = (List<Map<String, Object>>) map.get("candidates");
-                            Map<String, Object> content = (Map<String, Object>) candidates.get(0).get("content");
-                            List<Map<String, Object>> parts = (List<Map<String, Object>>) content.get("parts");
-                            return (String) parts.get(0).get("text");
-                        } catch (Exception ex) {
-                            log.error("Failed to parse Gemini response structure", ex);
-                            return null;
-                        }
-                    })
-                    .onErrorReturn(fallbackText)
                     .block();
 
-            return response != null ? response.trim() : fallbackText;
-        } catch (Exception e) {
-            log.error("Failed to call Gemini API", e);
+            String text = extractGeminiText(map);
+            if (text != null && !text.isBlank()) {
+                return text.trim();
+            }
+            log.error("Gemini returned no usable text; using fallback. Response meta: {}", geminiResponseMeta(map));
             return fallbackText;
+        } catch (Exception e) {
+            log.error("Failed to call Gemini API; using fallback.", e);
+            return fallbackText;
+        }
+    }
+
+    /** Safely pulls candidates[0].content.parts[*].text, concatenating multi-part responses. */
+    @SuppressWarnings("unchecked")
+    private String extractGeminiText(Map<String, Object> map) {
+        if (map == null) return null;
+        try {
+            List<Map<String, Object>> candidates = (List<Map<String, Object>>) map.get("candidates");
+            if (candidates == null || candidates.isEmpty()) return null;
+            Map<String, Object> content = (Map<String, Object>) candidates.get(0).get("content");
+            if (content == null) return null;
+            List<Map<String, Object>> parts = (List<Map<String, Object>>) content.get("parts");
+            if (parts == null || parts.isEmpty()) return null;
+            StringBuilder sb = new StringBuilder();
+            for (Map<String, Object> part : parts) {
+                Object t = part.get("text");
+                if (t != null) sb.append(t);
+            }
+            return sb.length() == 0 ? null : sb.toString();
+        } catch (Exception ex) {
+            log.error("Failed to parse Gemini response structure", ex);
+            return null;
+        }
+    }
+
+    /** Extracts diagnostic fields (finishReason / promptFeedback) for logging when no text comes back. */
+    @SuppressWarnings("unchecked")
+    private String geminiResponseMeta(Map<String, Object> map) {
+        if (map == null) return "null response";
+        try {
+            Object finishReason = null;
+            List<Map<String, Object>> candidates = (List<Map<String, Object>>) map.get("candidates");
+            if (candidates != null && !candidates.isEmpty()) {
+                finishReason = candidates.get(0).get("finishReason");
+            }
+            Object promptFeedback = map.get("promptFeedback");
+            return "finishReason=" + finishReason + ", promptFeedback=" + promptFeedback;
+        } catch (Exception ex) {
+            return "unparseable response";
         }
     }
 

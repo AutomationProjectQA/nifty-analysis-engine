@@ -183,7 +183,7 @@ const StrategyBuilder = () => {
         )}
       </Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        Build an options strategy and preview its payoff at expiry. Premiums are theoretical (Black-Scholes from live IV).
+        Build an options strategy and preview its payoff at expiry. Premiums use the live broker LTP when available, falling back to theoretical Black-Scholes (from live IV) otherwise.
       </Typography>
 
       {error && (

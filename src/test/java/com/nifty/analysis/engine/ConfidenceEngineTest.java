@@ -70,8 +70,8 @@ class ConfidenceEngineTest {
         latest.setVwap(23500.0);
         latest.setIndiaVix(12.0);
 
-        OptionSnapshotDto s1 = new OptionSnapshotDto(23400, 10000L, 50000L, 0L, 0L, 12.0, 5.0, 23500.0, 1000L, 2000L, now);
-        OptionSnapshotDto s2 = new OptionSnapshotDto(23500, 80000L, 70000L, 0L, 0L, 12.0, 0.875, 23500.0, 1000L, 2000L, now);
+        OptionSnapshotDto s1 = new OptionSnapshotDto(23400, 10000L, 50000L, 0L, 0L, 12.0, 5.0, 23500.0, 1000L, 2000L, now, null, null);
+        OptionSnapshotDto s2 = new OptionSnapshotDto(23500, 80000L, 70000L, 0L, 0L, 12.0, 0.875, 23500.0, 1000L, 2000L, now, null, null);
         List<OptionSnapshotDto> chain = List.of(s1, s2);
 
         when(confidenceWeightRepository.findByActiveTrue()).thenReturn(Collections.emptyList());

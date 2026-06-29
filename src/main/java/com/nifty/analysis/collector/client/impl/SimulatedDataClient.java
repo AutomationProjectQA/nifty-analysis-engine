@@ -93,8 +93,10 @@ public class SimulatedDataClient implements MarketDataClient, OptionChainClient 
             long ceVolume = Math.max(5000L, ceOi / 10 + random.nextInt(10000));
             long peVolume = Math.max(5000L, peOi / 10 + random.nextInt(10000));
 
+            double ceLtp = Math.max(2.0, Math.round((s.spot - strike + 120.0) * 100.0) / 100.0);
+            double peLtp = Math.max(2.0, Math.round((strike - s.spot + 120.0) * 100.0) / 100.0);
             snapshots.add(new OptionSnapshotDto(strike, ceOi, peOi, ceOiChange, peOiChange,
-                    iv, pcr, (double) atmStrike, ceVolume, peVolume, now));
+                    iv, pcr, (double) atmStrike, ceVolume, peVolume, now, ceLtp, peLtp));
         }
         return snapshots;
     }

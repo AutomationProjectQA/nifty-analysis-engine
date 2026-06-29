@@ -127,7 +127,7 @@ class MarketCollectorServiceTest {
         MarketSnapshotDto marketDto = new MarketSnapshotDto(23500.0, 23530.0, 13.5, 100000.0, now);
 
         OptionSnapshotDto optionDto = new OptionSnapshotDto(23500, 50000L, 60000L, 1000L, 2000L, 12.5, 1.2, 23500.0,
-                10000L, 12000L, now);
+                10000L, 12000L, now, null, null);
         List<OptionSnapshotDto> optionDtos = List.of(optionDto);
 
         when(marketDataClient.fetchMarketData("NIFTY")).thenReturn(marketDto);
@@ -179,7 +179,7 @@ class MarketCollectorServiceTest {
         MarketSnapshotDto marketDto = new MarketSnapshotDto(23500.0, 23530.0, 13.5, 100000.0, now);
         when(marketDataClient.fetchMarketData("NIFTY")).thenReturn(marketDto);
         when(optionChainClient.fetchOptionChain("NIFTY")).thenReturn(List.of(
-                new OptionSnapshotDto(23500, 50000L, 60000L, 1000L, 2000L, 12.5, 1.2, 23500.0, 10000L, 12000L, now)));
+                new OptionSnapshotDto(23500, 50000L, 60000L, 1000L, 2000L, 12.5, 1.2, 23500.0, 10000L, 12000L, now, null, null)));
         when(technicalIndicatorService.calculateEmaFromCandles(any(String.class), any(String.class), anyInt(), any(LocalDateTime.class), anyDouble())).thenReturn(23500.0);
         when(technicalIndicatorService.calculateRsiFromCandles(any(String.class), any(String.class), anyInt(), any(LocalDateTime.class), anyDouble())).thenReturn(50.0);
         when(technicalIndicatorService.calculateVwap(any(String.class), anyDouble(), anyDouble(), any(LocalDateTime.class))).thenReturn(23500.0);

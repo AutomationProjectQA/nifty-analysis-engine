@@ -288,7 +288,7 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient,
                     }
                 }
 
-                dataFeedStatus.update("NIFTY", true); // real live market data
+                dataFeedStatus.update(instrument, true); // real live market data
                 return new MarketSnapshotDto(spot, futures, vix, volume, com.nifty.analysis.util.TimeUtil.nowIst());
             }
         } catch (Exception e) {
@@ -429,7 +429,9 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient,
                         (double) atmStrike,
                         b.ceVolume,
                         b.peVolume,
-                        now
+                        now,
+                        b.ceLtp,
+                        b.peLtp
                     ));
                 }
                 return snapshots;
@@ -645,7 +647,10 @@ public class AngelOneDataClient implements MarketDataClient, OptionChainClient,
         LocalDateTime now = com.nifty.analysis.util.TimeUtil.nowIst();
         for (int i = -20; i <= 20; i++) {
             int strike = atmStrike + (i * 50);
-            list.add(new OptionSnapshotDto(strike, 1000000L, 1100000L, 5000L, 10000L, 12.5, 1.1, (double) atmStrike, 150000L, 160000L, now));
+            // Synthetic, distance-based premiums so the demo chain isn't visibly empty.
+            double ceLtp = Math.max(2.0, Math.round((spot - strike + 120.0) * 100.0) / 100.0);
+            double peLtp = Math.max(2.0, Math.round((strike - spot + 120.0) * 100.0) / 100.0);
+            list.add(new OptionSnapshotDto(strike, 1000000L, 1100000L, 5000L, 10000L, 12.5, 1.1, (double) atmStrike, 150000L, 160000L, now, ceLtp, peLtp));
         }
         return list;
     }

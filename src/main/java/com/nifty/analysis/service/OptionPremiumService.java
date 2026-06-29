@@ -57,8 +57,14 @@ public class OptionPremiumService {
                 .sorted(Comparator.comparingInt(OptionSnapshot::getStrikePrice))
                 .map(o -> {
                     double iv = o.getIv() != null && o.getIv() > 0 ? o.getIv() : 12.5;
-                    double ce = blackScholesService.price(spotFinal, o.getStrikePrice(), iv, years, true);
-                    double pe = blackScholesService.price(spotFinal, o.getStrikePrice(), iv, years, false);
+                    // Prefer the real broker LTP when present; fall back to the theoretical
+                    // Black-Scholes price (which needs a positive spot) otherwise.
+                    double ce = o.getCeLtp() != null && o.getCeLtp() > 0
+                            ? o.getCeLtp()
+                            : blackScholesService.price(spotFinal, o.getStrikePrice(), iv, years, true);
+                    double pe = o.getPeLtp() != null && o.getPeLtp() > 0
+                            ? o.getPeLtp()
+                            : blackScholesService.price(spotFinal, o.getStrikePrice(), iv, years, false);
                     return new OptionPremiumDto.StrikePremium(o.getStrikePrice(), iv, ce, pe);
                 })
                 .toList();

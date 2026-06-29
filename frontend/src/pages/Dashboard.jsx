@@ -6,6 +6,7 @@ import TrendingDownIcon from '@mui/icons-material/TrendingDown';
 import SwapCallsIcon from '@mui/icons-material/SwapCalls';
 import api from '../api/client';
 import { subscribe } from '../api/marketStream';
+import useFeedStatus from '../hooks/useFeedStatus';
 
 import TradingViewChart from '../components/TradingViewChart';
 
@@ -34,7 +35,11 @@ const Dashboard = () => {
     ema50: 23478.45
   });
   
-  const [live, setLive] = useState(null); // null=loading, true=live, false=demo fallback
+  const [live, setLive] = useState(null); // null=loading, true=connected, false=backend offline
+  // The broker feed may be a SIMULATED fallback even when the backend is reachable — surface
+  // that so fabricated numbers are never labelled "live".
+  const feedSource = useFeedStatus();
+  const isSimulated = feedSource === 'SIMULATED';
 
   const fetchMarketData = async () => {
     try {
@@ -129,12 +134,20 @@ const Dashboard = () => {
               sx={{ bgcolor: 'rgba(107,113,133,0.12)', color: 'text.secondary', border: '1px solid rgba(107,113,133,0.25)', fontWeight: 600 }} />
           )}
           {live === false && (
-            <Chip label="Demo data" size="small"
+            <Chip label="Backend offline — demo data" size="small"
               sx={{ bgcolor: 'rgba(255,179,0,0.12)', color: '#ffb300', border: '1px solid rgba(255,179,0,0.3)', fontWeight: 600 }} />
+          )}
+          {live === true && isSimulated && (
+            <Chip label="Simulated feed — not live" size="small"
+              sx={{ bgcolor: 'rgba(255,159,10,0.12)', color: '#ff9f0a', border: '1px solid rgba(255,159,10,0.3)', fontWeight: 600 }} />
+          )}
+          {live === true && !isSimulated && feedSource === 'LIVE' && (
+            <Chip label="● Live" size="small"
+              sx={{ bgcolor: 'rgba(0,179,134,0.12)', color: '#00b386', border: '1px solid rgba(0,179,134,0.3)', fontWeight: 600 }} />
           )}
         </Box>
         <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 500 }}>
-          Refreshes every 5s
+          Live via WebSocket
         </Typography>
       </Typography>
 
